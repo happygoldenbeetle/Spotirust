@@ -1749,7 +1749,11 @@ impl Interactivity {
                 .max(&Default::default());
             // Clamp scroll offset in case scroll max is smaller now (e.g., if children
             // were removed or the bounds became larger).
+            let cell = scroll_offset.clone();
             let mut scroll_offset = scroll_offset.borrow_mut();
+            if smooth_step(&cell, &mut scroll_offset, scroll_max) {
+                window.request_animation_frame();
+            }
 
             scroll_offset.x = scroll_offset.x.clamp(-scroll_max.width, px(0.));
             if scroll_to_bottom {
@@ -2416,9 +2420,14 @@ impl Interactivity {
             let current_view = window.current_view();
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
+                    let cell = scroll_offset.clone();
                     let mut scroll_offset = scroll_offset.borrow_mut();
                     let old_scroll_offset = *scroll_offset;
-                    let delta = event.delta.pixel_delta(line_height);
+                    let smooth = matches!(event.delta, crate::ScrollDelta::Lines(_));
+                    let delta = match event.delta {
+                        crate::ScrollDelta::Lines(l) => point(px(l.x * SMOOTH_PX_PER_LINE), px(l.y * SMOOTH_PX_PER_LINE)),
+                        d => d.pixel_delta(line_height),
+                    };
 
                     let mut delta_x = Pixels::ZERO;
                     if overflow.x == Overflow::Scroll {
@@ -2443,10 +2452,18 @@ impl Interactivity {
                             delta_x = Pixels::ZERO;
                         }
                     }
-                    scroll_offset.y += delta_y;
-                    scroll_offset.x += delta_x;
-                    if *scroll_offset != old_scroll_offset {
-                        cx.notify(current_view);
+                    if smooth {
+                        if !delta_x.is_zero() || !delta_y.is_zero() {
+                            smooth_push(&cell, old_scroll_offset, point(delta_x, delta_y));
+                            cx.notify(current_view);
+                        }
+                        let _ = line_height;
+                    } else {
+                        scroll_offset.y += delta_y;
+                        scroll_offset.x += delta_x;
+                        if *scroll_offset != old_scroll_offset {
+                            cx.notify(current_view);
+                        }
                     }
                 }
             });
@@ -3247,4 +3264,76 @@ impl ScrollHandle {
     pub fn children_count(&self) -> usize {
         self.0.borrow().child_bounds.len()
     }
+}
+
+
+// ---- Smooth wheel scrolling (Chromium-style) ----------------------------------------------------
+// A mouse wheel notch (a `ScrollDelta::Lines` event) doesn't jump: it sets a target and the offset
+// eases there over a short animation, like Chromium's wheel scrolling. Trackpads (pixel deltas)
+// still scroll directly. Keyed by the address of the element's shared offset cell.
+
+/// Chromium on Windows: 100px per notch at the default 3 lines.
+const SMOOTH_PX_PER_LINE: f32 = 100. / 3.;
+const SMOOTH_DURATION: std::time::Duration = std::time::Duration::from_millis(160);
+
+struct SmoothScroll {
+    from: Point<Pixels>,
+    target: Point<Pixels>,
+    start: std::time::Instant,
+    /// The value last written, so an outside change (set_offset, scrollbar drag) cancels the animation.
+    written: Point<Pixels>,
+}
+
+thread_local! {
+    static SMOOTH: RefCell<HashMap<usize, SmoothScroll>> = RefCell::new(HashMap::default());
+}
+
+fn smooth_key(cell: &Rc<RefCell<Point<Pixels>>>) -> usize {
+    Rc::as_ptr(cell) as *const () as usize
+}
+
+/// Ease-out (close to Chromium's impulse curve for wheel scrolls).
+fn smooth_ease(t: f32) -> f32 {
+    1. - (1. - t).powi(3)
+}
+
+/// Starts or retargets the animation for a wheel notch: a notch during an animation adds to its target.
+fn smooth_push(cell: &Rc<RefCell<Point<Pixels>>>, current: Point<Pixels>, delta: Point<Pixels>) {
+    SMOOTH.with(|m| {
+        let mut m = m.borrow_mut();
+        let key = smooth_key(cell);
+        let base = match m.get(&key) {
+            Some(a) if a.written == current => a.target,
+            _ => current,
+        };
+        m.insert(
+            key,
+            SmoothScroll { from: current, target: base + delta, start: std::time::Instant::now(), written: current },
+        );
+    });
+}
+
+/// Advances a running animation for this offset (clamped to `max`); true while it continues.
+fn smooth_step(cell: &Rc<RefCell<Point<Pixels>>>, offset: &mut Point<Pixels>, max: Size<Pixels>) -> bool {
+    SMOOTH.with(|m| {
+        let mut m = m.borrow_mut();
+        let key = smooth_key(cell);
+        let Some(a) = m.get_mut(&key) else { return false };
+        if *offset != a.written {
+            m.remove(&key);
+            return false;
+        }
+        let target = point(a.target.x.clamp(-max.width, px(0.)), a.target.y.clamp(-max.height, px(0.)));
+        let t = (a.start.elapsed().as_secs_f32() / SMOOTH_DURATION.as_secs_f32()).min(1.);
+        let k = smooth_ease(t);
+        let v = point(a.from.x + (target.x - a.from.x) * k, a.from.y + (target.y - a.from.y) * k);
+        *offset = v;
+        a.written = v;
+        if t >= 1. {
+            m.remove(&key);
+            false
+        } else {
+            true
+        }
+    })
 }
