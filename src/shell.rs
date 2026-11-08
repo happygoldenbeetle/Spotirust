@@ -19,6 +19,7 @@ mod artist_view;
 mod create_menu;
 mod profile_menu;
 mod friends_view;
+mod browse_view;
 mod library_view;
 mod user_view;
 mod playlist_view;
@@ -106,6 +107,7 @@ pub struct Shell {
     right_panel: RightPanel,
     friends: Option<Vec<friends_view::Friend>>,
     jam_card_dismissed: bool,
+    browse: Option<Vec<browse_view::BrowseCard>>,
     notifications: Option<Vec<profile_menu::Notification>>,
     profile_scroll: gpui::ScrollHandle,
     create_toggled_at: std::time::Instant,
@@ -140,6 +142,8 @@ pub enum Page {
     User(String),
     /// Liked Songs (`spotify:collection:tracks` in the client's router).
     Liked,
+    /// Browse ("Browse all" categories; `/search` in the client's router).
+    Browse,
 }
 
 impl Page {
@@ -268,6 +272,7 @@ impl Shell {
             right_panel: RightPanel::NowPlaying,
             friends: None,
             jam_card_dismissed: false,
+            browse: None,
             notifications: None,
             profile_scroll: gpui::ScrollHandle::new(),
             create_toggled_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
@@ -346,6 +351,9 @@ impl Shell {
                         }
                         if let Err(e) = sp.buddylist() {
                             eprintln!("dump buddylist: {e:#}");
+                        }
+                        if let Err(e) = sp.browse_all() {
+                            eprintln!("dump browse: {e:#}");
                         }
                     }
                     if let Ok(uri) = std::env::var("SPOTIRUST_DUMP_ARTIST") {
@@ -654,6 +662,7 @@ impl Shell {
                 self.load_artist(uri, cx);
             }
             Page::User(uri) => self.load_user(uri, cx),
+            Page::Browse => self.load_browse(cx),
             Page::Home => {}
         }
         cx.notify();
@@ -1149,10 +1158,17 @@ impl Shell {
                                     )
                                     .child(
                                         div()
+                                            .id("browse-button")
                                             .absolute()
                                             .left(px(434.))
                                             .top(px(12.))
-                                            .child(icon("icons/browse.svg", 24., TEXT_SUBDUED)),
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| this.open(Page::Browse, cx)))
+                                            .child(if self.page == Page::Browse {
+                                                icon("icons/browse_filled.svg", 24., WHITE).into_any_element()
+                                            } else {
+                                                icon("icons/browse.svg", 24., TEXT_SUBDUED).into_any_element()
+                                            }),
                                     ),
                             ),
                     ),
@@ -2621,6 +2637,7 @@ impl Render for Shell {
                         Page::Home => self.home_view(main_w, cx).into_any_element(),
                         Page::Playlist(uri) | Page::Album(uri) => self.playlist_view(&uri, main_w, window, cx),
                         Page::Liked => self.playlist_view(LIKED_URI, main_w, window, cx),
+                        Page::Browse => self.browse_view(main_w, window, cx),
                         Page::Artist(uri) => self.artist_view(&uri, main_w, window, cx),
                         Page::User(uri) => self.user_view(&uri, main_w, window, cx),
                     })

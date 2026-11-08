@@ -26,6 +26,7 @@ const LIBRARY_HASH: &str = "390c78e5b951029bad359785e69b07b536a509c581cbcd0aded5
 /// Persisted query captured from the real client's album page (2026-11-07).
 /// Persisted query captured from the real client's artist page (2026-11-08).
 const ARTIST_HASH: &str = "9f8134ef565e78621f1e1793555bd6633c5ac144ae0f89604ed3ae3f80b3c8e6";
+const BROWSE_ALL_HASH: &str = "dbd8b55e09a58afc52eab438bc228ba28fd72ac2f2148c6c26354980e4579001";
 const USER_TOP_HASH: &str = "61b7353d3625780022dbc63d459eb64cd609e7e5e2a820f9160d65030efe2e15";
 const EXTRACTED_COLORS_HASH: &str = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
 const ALBUM_HASH: &str = "0b6ce3511e1b02e4a40fa95440f992acbe85080eb308af9194322d708fc1914f";
@@ -214,6 +215,21 @@ impl Spotify {
         // subscribes to live updates (its first response is empty); v1 returns the list.
         let v = self.spclient_json("/presence-view/v1/buddylist")?;
         dump("buddylist", &v);
+        Ok(v)
+    }
+
+    /// Blocking: the Browse page ("Browse all" category cards), `browseAll`.
+    pub fn browse_all(&self) -> Result<serde_json::Value> {
+        let v = self.pathfinder(
+            "browseAll",
+            BROWSE_ALL_HASH,
+            serde_json::json!({
+                "pagePagination": { "offset": 0, "limit": 10 },
+                "sectionPagination": { "offset": 0, "limit": 99 },
+                "browseEndUserIntegration": "INTEGRATION_DESKTOP"
+            }),
+        )?;
+        dump("browse_all", &v);
         Ok(v)
     }
 
