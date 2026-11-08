@@ -18,6 +18,7 @@ use gpui::{
 mod artist_view;
 mod create_menu;
 mod profile_menu;
+mod friends_view;
 mod library_view;
 mod user_view;
 mod playlist_view;
@@ -102,6 +103,9 @@ pub struct Shell {
     create_open: bool,
     /// Profile (avatar) menu open, its "Your Updates" list and scroll.
     profile_open: bool,
+    right_panel: RightPanel,
+    friends: Option<Vec<friends_view::Friend>>,
+    jam_card_dismissed: bool,
     notifications: Option<Vec<profile_menu::Notification>>,
     profile_scroll: gpui::ScrollHandle,
     create_toggled_at: std::time::Instant,
@@ -116,6 +120,14 @@ pub struct Shell {
     /// Artist page: "See more" expanded (10 popular tracks), selected discography filter.
     artist_more: bool,
     disco_filter: usize,
+}
+
+/// What the right panel shows.
+#[derive(Clone, Copy, PartialEq)]
+pub enum RightPanel {
+    NowPlaying,
+    /// Listening activity (top bar friends button).
+    Friends,
 }
 
 #[derive(Clone, PartialEq)]
@@ -253,6 +265,9 @@ impl Shell {
             create_open: std::env::var_os("SPOTIRUST_CREATEMENU").is_some(),
             create_hover: None,
             profile_open: false,
+            right_panel: RightPanel::NowPlaying,
+            friends: None,
+            jam_card_dismissed: false,
             notifications: None,
             profile_scroll: gpui::ScrollHandle::new(),
             create_toggled_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
@@ -328,6 +343,9 @@ impl Shell {
                         }
                         if let Err(e) = sp.notifications() {
                             eprintln!("dump notifications: {e:#}");
+                        }
+                        if let Err(e) = sp.buddylist() {
+                            eprintln!("dump buddylist: {e:#}");
                         }
                     }
                     if let Ok(uri) = std::env::var("SPOTIRUST_DUMP_ARTIST") {
@@ -1151,7 +1169,14 @@ impl Shell {
                     .items_center()
                     .gap(px(8.))
                     .child(round_button("whats-new", 32.).occlude().child(icon("icons/bell.svg", 16., TEXT_SUBDUED)))
-                    .child(round_button("friends", 32.).occlude().child(icon("icons/friends.svg", 16., TEXT_SUBDUED)))
+                    .child(round_button("friends", 32.)
+                            .occlude()
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_friends(cx)))
+                            .child(if self.right_panel == RightPanel::Friends {
+                                icon("icons/friends_active.svg", 16., WHITE).into_any_element()
+                            } else {
+                                icon("icons/friends.svg", 16., TEXT_SUBDUED).into_any_element()
+                            }))
                     .child(round_button("user", 48.)
                             .occlude()
                             .bg(c(ELEVATED))
@@ -2600,7 +2625,10 @@ impl Render for Shell {
                         Page::User(uri) => self.user_view(&uri, main_w, window, cx),
                     })
                     .child(self.resize_bar(Side::Right, cx))
-                    .child(self.now_playing_panel(cx)),
+                    .child(match self.right_panel {
+                        RightPanel::NowPlaying => self.now_playing_panel(cx).into_any_element(),
+                        RightPanel::Friends => self.friends_panel(cx).into_any_element(),
+                    }),
             )
             .child(self.player_bar(cx))
             .children(self.library_menu(cx))

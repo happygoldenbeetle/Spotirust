@@ -207,6 +207,16 @@ impl Spotify {
         Ok(v)
     }
 
+    /// Blocking: what friends are listening to (`presence-view/v1/buddylist`), for the
+    /// Listening activity panel.
+    pub fn buddylist(&self) -> Result<serde_json::Value> {
+        // The client also opens `v2/init-friend-feed/{dealer connection}`, but that only
+        // subscribes to live updates (its first response is empty); v1 returns the list.
+        let v = self.spclient_json("/presence-view/v1/buddylist")?;
+        dump("buddylist", &v);
+        Ok(v)
+    }
+
     /// Blocking: "Top artists this month" for the signed-in user (`userTopContent`).
     pub fn user_top_artists(&self, limit: u32) -> Result<serde_json::Value> {
         let input = serde_json::json!({ "offset": 0, "limit": limit, "sortBy": "AFFINITY", "timeRange": "SHORT_TERM" });
@@ -361,3 +371,4 @@ fn dump(name: &str, v: &serde_json::Value) {
         let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{name}.json")), v.to_string());
     }
 }
+

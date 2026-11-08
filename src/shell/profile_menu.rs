@@ -1,11 +1,11 @@
-//! Profile (avatar) menu. Measured on the reference:
+﻿//! Profile (avatar) menu. Measured on the reference:
 //!   328 wide, right edge on the avatar button's right edge, 8.8 below it; #282828, radius 4,
 //!   padding 4, sort-menu shadow. Items 40 tall (radius 2, padding 8 8 8 12): 14px
 //!   rgba(255,255,255,.9), hover rgba(255,255,255,.1) + white; external links end in a 16px icon.
 //!   After "Log out" a full-width 1px rgba(255,255,255,.1) divider, then "Your Updates"
 //!   (16/700 white, padding 8 8 0, title padding 8 0) over a list `min(25vh, 256px)` tall with a
 //!   classic scrollbar (15.2 wide, thumb rgba(255,255,255,.3)). Update rows 64 tall, radius 4,
-//!   padding 8 12: a 48px picture, then 12px "title • 8w" (time #B3B3B3), unread dot 8px #4687D6.
+//!   padding 8 12: a 48px picture, then 12px "title â€¢ 8w" (time #B3B3B3), unread dot 8px #4687D6.
 //!   Data: `gander/v2/GetNotifications`.
 
 use super::*;
@@ -148,7 +148,7 @@ impl Shell {
         }
         let close = |this: &mut Shell| this.profile_open = false;
         let mut menu = super::library_view::menu_list(true).w(px(MENU_W)).rounded(px(4.));
-        for (i, (label, external, action)) in ITEMS.iter().enumerate() {
+        for (i, (label, external, _)) in ITEMS.iter().enumerate() {
             let label = *label;
             menu = menu.child(
                 div()
