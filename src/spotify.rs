@@ -177,6 +177,7 @@ impl Spotify {
             .set("authorization", &format!("Bearer {bearer}"))
             .set("client-token", &client_token)
             .set("accept", "application/json")
+            .set("accept-language", "en")
             .call()
             .map_err(|e| match e {
                 ureq::Error::Status(code, r) => anyhow!("{path} -> {code}: {}", r.into_string().unwrap_or_default()),
@@ -197,6 +198,13 @@ impl Spotify {
         dump("followers", &followers);
         dump("following", &following);
         Ok((p, followers, following))
+    }
+
+    /// Blocking: "Your Updates" in the profile menu (`gander/v2/GetNotifications`, 20 per page).
+    pub fn notifications(&self) -> Result<serde_json::Value> {
+        let v = self.spclient_json("/gander/v2/GetNotifications?locale=&limit=20")?;
+        dump("notifications", &v);
+        Ok(v)
     }
 
     /// Blocking: "Top artists this month" for the signed-in user (`userTopContent`).

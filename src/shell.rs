@@ -17,6 +17,7 @@ use gpui::{
 
 mod artist_view;
 mod create_menu;
+mod profile_menu;
 mod library_view;
 mod user_view;
 mod playlist_view;
@@ -99,6 +100,10 @@ pub struct Shell {
     lib_hover: bool,
     /// Create (+) menu open; hovered item and the last un-hovered one, with when (icon animation).
     create_open: bool,
+    /// Profile (avatar) menu open, its "Your Updates" list and scroll.
+    profile_open: bool,
+    notifications: Option<Vec<profile_menu::Notification>>,
+    profile_scroll: gpui::ScrollHandle,
     create_toggled_at: std::time::Instant,
     /// When a menu was last closed by a click outside it: the click that closed it, if it lands on
     /// the menu's own button, must not reopen it.
@@ -247,6 +252,9 @@ impl Shell {
             lib_hover: false,
             create_open: std::env::var_os("SPOTIRUST_CREATEMENU").is_some(),
             create_hover: None,
+            profile_open: false,
+            notifications: None,
+            profile_scroll: gpui::ScrollHandle::new(),
             create_toggled_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
             menu_closed_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
             create_unhover: None,
@@ -317,6 +325,9 @@ impl Shell {
                         }
                         if let Err(e) = sp.user_top_artists(10) {
                             eprintln!("dump top: {e:#}");
+                        }
+                        if let Err(e) = sp.notifications() {
+                            eprintln!("dump notifications: {e:#}");
                         }
                     }
                     if let Ok(uri) = std::env::var("SPOTIRUST_DUMP_ARTIST") {
@@ -470,9 +481,10 @@ impl Shell {
         let k = &ev.keystroke;
         let ctrl = k.modifiers.control;
         let pb = self.playback.clone();
-        if k.key == "escape" && (self.lib_menu || self.create_open) {
+        if k.key == "escape" && (self.lib_menu || self.create_open || self.profile_open) {
             self.lib_menu = false;
             self.create_open = false;
+            self.profile_open = false;
             cx.notify();
             return;
         }
@@ -1140,7 +1152,11 @@ impl Shell {
                     .gap(px(8.))
                     .child(round_button("whats-new", 32.).occlude().child(icon("icons/bell.svg", 16., TEXT_SUBDUED)))
                     .child(round_button("friends", 32.).occlude().child(icon("icons/friends.svg", 16., TEXT_SUBDUED)))
-                    .child(round_button("user", 48.).occlude().bg(c(ELEVATED)).child(avatar)),
+                    .child(round_button("user", 48.)
+                            .occlude()
+                            .bg(c(ELEVATED))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_profile_menu(cx)))
+                            .child(avatar)),
             )
             .child(crate::titlebar::caption_buttons())
     }
@@ -2589,6 +2605,7 @@ impl Render for Shell {
             .child(self.player_bar(cx))
             .children(self.library_menu(cx))
             .children(self.create_menu(window, cx))
+            .children(self.profile_menu(window, cx))
             .when_some(self.visible_toast(), |d, text| {
                 d.child(
                     div()
