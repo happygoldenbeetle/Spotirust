@@ -1,0 +1,15 @@
+# Build output
+/target
+
+# Local scratch: reference captures, API dumps, helper scripts
+/temp
+
+# Stray screenshots in the repo root
+/*.png
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
