@@ -116,7 +116,15 @@ fn main() {
         load_fonts(cx);
         images::init(cx);
 
-        let bounds = Bounds::centered(None, size(px(1551.2), px(831.2)), cx);
+        // The reference client's default size, shrunk to fit the primary display (at 125% a
+        // 1920x1080 screen is only 1536x864 logical) so the window always opens fully on screen.
+        let mut want = size(px(1551.2), px(831.2));
+        if let Some(display) = cx.primary_display() {
+            let screen = display.bounds().size;
+            want.width = want.width.min(screen.width - px(32.));
+            want.height = want.height.min(screen.height - px(80.));
+        }
+        let bounds = Bounds::centered(None, want, cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
