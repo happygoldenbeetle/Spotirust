@@ -4,6 +4,7 @@ mod api;
 mod assets;
 mod auth;
 mod backdrop;
+mod anim;
 mod home;
 mod user;
 mod http;

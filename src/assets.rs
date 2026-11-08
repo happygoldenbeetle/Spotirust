@@ -33,7 +33,7 @@ embedded!(
     "icons/pl_invite12.svg", "icons/pl_explore.svg", "icons/pl_shuffle24.svg", "icons/pl_download24.svg",
     "icons/pl_adduser24.svg", "icons/pl_more24.svg", "icons/pl_search16.svg", "icons/pl_list16.svg",
     "icons/pl_plus16.svg", "icons/pl_mix16.svg", "icons/pl_pencil16.svg", "icons/pl_clock16.svg",
-    "icons/pl_columns16.svg", "icons/pl_play24b.svg", "icons/pl_explore_frame.svg", "icons/caret_down16.svg", "icons/verified24.svg", "icons/gear24.svg",
+    "icons/pl_columns16.svg", "icons/pl_play24b.svg", "icons/pl_explore_frame.svg", "icons/caret_down16.svg", "icons/verified24.svg", "icons/gear24.svg", "icons/check16.svg", "icons/lib_collapse16.svg", "icons/arrow_down16.svg", "icons/arrow_up16.svg", "icons/view_compact_list16.svg", "icons/view_list16.svg", "icons/view_compact_grid16.svg", "icons/view_grid16.svg",
     "icons/copy_link.svg", "icons/library.svg", "icons/verified.svg", "icons/chevron_left.svg", "icons/chevron_right.svg",
     "fonts/Figtree-400.ttf",
     "fonts/Figtree-700.ttf",

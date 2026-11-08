@@ -16,6 +16,7 @@ use gpui::{
 };
 
 mod artist_view;
+mod library_view;
 mod user_view;
 mod playlist_view;
 
@@ -88,6 +89,14 @@ pub struct Shell {
     page_scroll: gpui::ScrollHandle,
     artist_pages: HashMap<String, ArtistPage>,
     user_pages: HashMap<String, UserPage>,
+    lib_prefs: library_view::LibPrefs,
+    lib_menu: bool,
+    /// View-as highlight animation: index it slides from, and a counter that restarts it.
+    lib_view_from: f32,
+    lib_view_seq: usize,
+    /// Library panel hovered (slides the title right and reveals the collapse icon), and when.
+    lib_hover: bool,
+    lib_hover_at: std::time::Instant,
     /// Track URIs in Liked Songs (tracklists show a green check for these).
     liked: HashSet<String>,
     /// Artist page: "See more" expanded (10 popular tracks), selected discography filter.
@@ -221,6 +230,13 @@ impl Shell {
             page_scroll: gpui::ScrollHandle::new(),
             artist_pages: HashMap::new(),
             user_pages: HashMap::new(),
+            lib_prefs: library_view::LibPrefs::load(),
+            // Debug: SPOTIRUST_LIBMENU=1 opens the library Sort/View menu (for captures).
+            lib_menu: std::env::var_os("SPOTIRUST_LIBMENU").is_some(),
+            lib_view_from: library_view::LibPrefs::load().view_index(),
+            lib_view_seq: 0,
+            lib_hover: false,
+            lib_hover_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
             liked: HashSet::new(),
             artist_more: false,
             disco_filter: 0,
@@ -413,6 +429,11 @@ impl Shell {
         let k = &ev.keystroke;
         let ctrl = k.modifiers.control;
         let pb = self.playback.clone();
+        if k.key == "escape" && self.lib_menu {
+            self.lib_menu = false;
+            cx.notify();
+            return;
+        }
         match (k.key.as_str(), ctrl) {
             ("space", false) if !ev.is_held => self.toggle_play(cx),
             ("right", true) => self.command(|api| api.next(), cx),
@@ -1099,6 +1120,7 @@ impl Shell {
             image: Some("https://misc.scdn.co/liked-songs/liked-songs-300.png".into()),
             pinned: true,
             mixed: false,
+            added_at: String::new(),
         }];
         out.extend(self.playlists.iter().map(|p| LibItem {
             uri: format!("spotify:playlist:{}", p.id),
@@ -1108,23 +1130,32 @@ impl Shell {
             image: api::pick_image(&p.images, 96).map(|i| i.url.clone()),
             pinned: false,
             mixed: false,
+            added_at: String::new(),
         }));
         out
     }
 
-    fn library(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn library(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.left_collapsed {
             return self.library_rail(cx);
         }
         let me_name = self.me.as_ref().and_then(|m| m.display_name.clone()).unwrap_or_default();
-        let rows: Vec<AnyElement> = self
-            .library_items()
-            .iter()
-            .enumerate()
-            .map(|(i, item)| self.library_row(i, item, &me_name, cx))
-            .collect();
+        let mut items = self.library_items();
+        library_view::sort_items(&mut items, self.lib_prefs);
+        let rows = self.library_content(&items, &me_name, cx);
 
+        // Hovering the panel: title slides 24 right (transform .1s ease-out); the collapse icon
+        // slides in and fades in after it (.1s ease-out, .1s delay). Reversed on leave.
+        let ms = self.lib_hover_at.elapsed().as_secs_f32() * 1000.;
+        let (tp, ip) = (crate::anim::progress(ms, 0., 100.), crate::anim::progress(ms, 100., 100.));
+        let (tp, ip) = if self.lib_hover { (crate::anim::ease_out(tp), crate::anim::ease_out(ip)) } else { (1. - crate::anim::ease_out(tp), 1. - crate::anim::ease_out(ip)) };
+        if ms < 200. {
+            window.request_animation_frame();
+        }
+        // measured: pill "Create" from a 332px panel, round 35px "+" below
+        let create_pill = self.left_w >= 332.;
         div()
+            .id("library-panel")
             .w(px(self.left_w))
             .flex_none()
             .h_full()
@@ -1133,6 +1164,13 @@ impl Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
+            .on_hover(cx.listener(|this, h: &bool, _, cx| {
+                if this.lib_hover != *h {
+                    this.lib_hover = *h;
+                    this.lib_hover_at = std::time::Instant::now();
+                    cx.notify();
+                }
+            }))
             // header: "Your Library" text box at (20, 22.4); Create pill and expand button at y 16
             .child(
                 div()
@@ -1147,23 +1185,40 @@ impl Shell {
                     .child(
                         div()
                             .id("lib-title")
+                            .group("lib-title")
+                            .relative()
                             .flex_1()
                             .min_w_0()
-                            .pt(px(6.4))
+                            .h(px(35.2))
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.left_collapsed = true;
                                 cx.notify();
                             }))
                             .child(
+                                svg()
+                                    .path("icons/lib_collapse16.svg")
+                                    .absolute()
+                                    .top(px(9.5))
+                                    .left(px(-44. + 40. * ip))
+                                    .size(px(16.))
+                                    .opacity(ip)
+                                    .text_color(c(TEXT_SUBDUED))
+                                    .group_hover("lib-title", |s| s.text_color(c(WHITE))),
+                            )
+                            .child(
                                 one_line("Your Library")
+                                    .absolute()
+                                    .top(px(6.4))
+                                    .left(px(24. * tp))
+                                    .right_0()
                                     .text_size(px(16.))
                                     .line_height(px(22.4))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(c(WHITE)),
                             ),
                     )
-                    .child(
+                    .child(if create_pill {
                         div()
                             .id("create")
                             .h(px(35.2))
@@ -1185,8 +1240,13 @@ impl Shell {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(c(WHITE))
                                     .child("Create"),
-                            ),
-                    )
+                            )
+                    } else {
+                        round_button("create", 35.)
+                            .bg(c(ELEVATED))
+                            .hover(|s| s.bg(c(0x2A2A2A)))
+                            .child(icon("icons/plus.svg", 16., TEXT_SUBDUED))
+                    })
                     .child(
                         round_button("expand-library", 35.)
                             .h(px(35.2))
@@ -1265,10 +1325,17 @@ impl Shell {
                             .line_height(px(19.2))
                             .text_color(c(TEXT_SUBDUED))
                             .hover(|s| s.text_color(c(WHITE)))
-                            .child("Recents")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.lib_menu = !this.lib_menu;
+                                // opening: the View-as highlight starts on the current view (no slide)
+                                this.lib_view_from = this.lib_prefs.view_index();
+                                this.lib_view_seq += 1;
+                                cx.notify();
+                            }))
+                            .child(self.lib_prefs.sort.label())
                             .child(
                                 svg()
-                                    .path("icons/list.svg")
+                                    .path(self.lib_prefs.view.icon())
                                     .size(px(16.))
                                     .text_color(c(TEXT_SUBDUED))
                                     .group_hover("sort", |s| s.text_color(c(WHITE))),
@@ -2436,7 +2503,7 @@ impl Render for Shell {
                     .mb(px(8.))
                     .flex()
                     .flex_row()
-                    .child(self.library(cx))
+                    .child(self.library(window, cx))
                     .child(self.resize_bar(Side::Left, cx))
                     .child(match self.page.clone() {
                         Page::Home => self.home_view(main_w, cx).into_any_element(),
@@ -2449,6 +2516,7 @@ impl Render for Shell {
                     .child(self.now_playing_panel(cx)),
             )
             .child(self.player_bar(cx))
+            .children(self.library_menu(cx))
             .when_some(self.visible_toast(), |d, text| {
                 d.child(
                     div()

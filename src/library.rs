@@ -23,6 +23,8 @@ pub struct LibItem {
     pub pinned: bool,
     /// "Mixed playlist" (MIX_STATE extension), filled in separately.
     pub mixed: bool,
+    /// `addedAt` ISO time (sorts "Recently added"); empty when unknown.
+    pub added_at: String,
 }
 
 impl LibItem {
@@ -59,6 +61,7 @@ pub fn parse(v: &Value, me_name: &str) -> Vec<LibItem> {
     let mut out = Vec::new();
     for it in items.into_iter().flatten() {
         let pinned = it.get("pinned").and_then(Value::as_bool).unwrap_or(false);
+        let added_at = s(it, "/addedAt/isoString").unwrap_or_default().to_string();
         let wrapper = it.get("item").unwrap_or(&Value::Null);
         let uri = s(wrapper, "/_uri").unwrap_or_default().to_string();
         let d = wrapper.get("data").unwrap_or(&Value::Null);
@@ -73,6 +76,7 @@ pub fn parse(v: &Value, me_name: &str) -> Vec<LibItem> {
                 image: pick(d.pointer("/image/sources"), 120),
                 pinned,
                 mixed: false,
+                added_at: added_at.clone(),
             },
             "Playlist" => LibItem {
                 uri,
@@ -82,6 +86,7 @@ pub fn parse(v: &Value, me_name: &str) -> Vec<LibItem> {
                 image: pick(d.pointer("/images/items/0/sources"), 120),
                 pinned,
                 mixed: false,
+                added_at: added_at.clone(),
             },
             "Album" => LibItem {
                 uri,
@@ -95,6 +100,7 @@ pub fn parse(v: &Value, me_name: &str) -> Vec<LibItem> {
                 image: pick(d.pointer("/coverArt/sources"), 120),
                 pinned,
                 mixed: false,
+                added_at: added_at.clone(),
             },
             "Artist" => LibItem {
                 uri,
@@ -104,6 +110,7 @@ pub fn parse(v: &Value, me_name: &str) -> Vec<LibItem> {
                 image: pick(d.pointer("/visuals/avatarImage/sources"), 120),
                 pinned,
                 mixed: false,
+                added_at: added_at.clone(),
             },
             "Folder" => LibItem {
                 uri,
@@ -113,6 +120,7 @@ pub fn parse(v: &Value, me_name: &str) -> Vec<LibItem> {
                 image: None,
                 pinned,
                 mixed: false,
+                added_at: added_at.clone(),
             },
             "Podcast" => LibItem {
                 uri,
@@ -122,6 +130,7 @@ pub fn parse(v: &Value, me_name: &str) -> Vec<LibItem> {
                 image: pick(d.pointer("/coverArt/sources"), 120),
                 pinned,
                 mixed: false,
+                added_at: added_at.clone(),
             },
             _ => continue,
         };
