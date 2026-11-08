@@ -2433,7 +2433,12 @@ impl Interactivity {
                     if overflow.x == Overflow::Scroll {
                         if !delta.x.is_zero() {
                             delta_x = delta.x;
-                        } else if !restrict_scroll_to_axis && overflow.y != Overflow::Scroll {
+                        } else if !restrict_scroll_to_axis
+                            && overflow.y != Overflow::Scroll
+                            && (event.modifiers.shift || !smooth)
+                        {
+                            // Like Chromium: a vertical mouse wheel over a horizontal-only scroller
+                            // keeps scrolling the page; Shift+wheel scrolls it sideways.
                             delta_x = delta.y;
                         }
                     }
