@@ -973,7 +973,11 @@ impl WindowsWindowInner {
                 first_mouse: false,
             });
             let result = func(input);
-            let handled = !result.propagate || result.default_prevented;
+            // Caption buttons and the drag area belong to the window frame: a default-prevented
+            // press (e.g. focus moving to a focusable root) must not swallow them. Only an
+            // explicit stop_propagation counts as handled there.
+            let frame = matches!(wparam.0 as u32, HTCAPTION | HTMINBUTTON | HTMAXBUTTON | HTCLOSE);
+            let handled = !result.propagate || (result.default_prevented && !frame);
             self.state.borrow_mut().callbacks.input = Some(func);
 
             if handled {
