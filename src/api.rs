@@ -78,6 +78,63 @@ impl Api {
         v.get("uri").and_then(|u| u.as_str()).map(str::to_string).ok_or_else(|| anyhow!("POST {path}: no uri"))
     }
 
+    /// Adds a track or episode to the end of the play queue.
+    pub fn add_to_queue(&self, uri: &str) -> Result<()> {
+        self.send("POST", &format!("/me/player/queue?uri={}", enc(uri)), None)
+    }
+
+    /// Track URIs of an album or playlist (for "Add to queue" on a whole context).
+    pub fn context_tracks(&self, uri: &str) -> Result<Vec<String>> {
+        let id = uri.rsplit(':').next().unwrap_or_default();
+        let mut out = Vec::new();
+        let mut next = Some(match uri.split(':').nth(1) {
+            Some("album") => format!("/albums/{id}/tracks?limit=50"),
+            Some("playlist") => format!("/playlists/{id}/items?limit=100&fields=next,items(item(uri),track(uri))"),
+            _ => return Ok(out),
+        });
+        while let Some(path) = next.take() {
+            let v: serde_json::Value = self.get(&path)?;
+            for it in v.get("items").and_then(|i| i.as_array()).into_iter().flatten() {
+                let u = it.get("uri").or_else(|| it.pointer("/item/uri")).or_else(|| it.pointer("/track/uri"));
+                if let Some(u) = u.and_then(|u| u.as_str()) {
+                    out.push(u.to_string());
+                }
+            }
+            next = v.get("next").and_then(|n| n.as_str()).map(str::to_string);
+        }
+        Ok(out)
+    }
+
+    /// Appends tracks to a playlist.
+    pub fn add_to_playlist(&self, playlist_uri: &str, uris: &[String]) -> Result<()> {
+        let id = playlist_uri.rsplit(':').next().unwrap_or_default();
+        self.send("POST", &format!("/playlists/{id}/items"), Some(serde_json::json!({ "uris": uris })))
+    }
+
+    /// Removes every occurrence of a track from a playlist.
+    pub fn remove_from_playlist(&self, playlist_uri: &str, uri: &str) -> Result<()> {
+        let id = playlist_uri.rsplit(':').next().unwrap_or_default();
+        self.send("DELETE", &format!("/playlists/{id}/items"), Some(serde_json::json!({ "items": [{ "uri": uri }], "tracks": [{ "uri": uri }] })))
+    }
+
+    /// Saves / removes an album or playlist in Your Library (follow / unfollow for playlists).
+    pub fn set_in_library(&self, uri: &str, saved: bool) -> Result<()> {
+        let id = uri.rsplit(':').next().unwrap_or_default();
+        let method = if saved { "PUT" } else { "DELETE" };
+        match uri.split(':').nth(1) {
+            Some("album") => self.send(method, &format!("/me/albums?ids={id}"), None),
+            Some("playlist") => self.send(method, &format!("/playlists/{id}/followers"), None),
+            Some("artist") => self.send(method, &format!("/me/following?type=artist&ids={id}"), None),
+            _ => Err(anyhow!("can't save {uri}")),
+        }
+    }
+
+    /// Makes one of your playlists public or private.
+    pub fn set_playlist_public(&self, uri: &str, public: bool) -> Result<()> {
+        let id = uri.rsplit(':').next().unwrap_or_default();
+        self.send("PUT", &format!("/playlists/{id}"), Some(serde_json::json!({ "public": public })))
+    }
+
     pub fn resume(&self) -> Result<()> {
         self.send("PUT", "/me/player/play", None)
     }
@@ -339,4 +396,14 @@ where
     T: Default + Deserialize<'de>,
 {
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// Percent-encodes a query value.
+fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }

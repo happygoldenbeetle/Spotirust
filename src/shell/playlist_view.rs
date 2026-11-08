@@ -716,6 +716,7 @@ impl Shell {
         let (ctx, track) = (context.to_string(), t.uri.clone());
         let mut row = div()
             .id(gpui::ElementId::Name(group.clone()))
+            .on_mouse_down(MouseButton::Right, self.track_ctx_listener(t, context, cx))
             .group(group.clone())
             .h(px(ROW_H))
             .px(px(16.))

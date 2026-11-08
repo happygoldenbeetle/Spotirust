@@ -182,7 +182,7 @@ impl Shell {
     }
 
     /// "Playlist": a new empty playlist named "My Playlist #N" (`playlist.new-default-name`), opened.
-    fn create_playlist(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn create_playlist(&mut self, cx: &mut Context<Self>) {
         let (Some(api), Some(me)) = (self.api.clone(), self.me.clone()) else { return };
         let me_name = me.display_name.clone().unwrap_or_default();
         let n = self.library_items().iter().filter(|i| i.kind == LibKind::Playlist && i.owner == me_name).count() + 1;

@@ -233,6 +233,17 @@ impl Spotify {
         Ok(v)
     }
 
+    /// Blocking: the radio playlist seeded by a track or artist ("Go to song radio" /
+    /// "Go to artist radio"), `inspiredby-mix/v2/seed_to_playlist`.
+    pub fn radio_for(&self, seed_uri: &str) -> Result<String> {
+        let v = self.spclient_json(&format!("/inspiredby-mix/v2/seed_to_playlist/{seed_uri}?response-format=json"))?;
+        dump("radio", &v);
+        v.pointer("/mediaItems/0/uri")
+            .and_then(|u| u.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("no radio for {seed_uri}"))
+    }
+
     /// Blocking: "Top artists this month" for the signed-in user (`userTopContent`).
     pub fn user_top_artists(&self, limit: u32) -> Result<serde_json::Value> {
         let input = serde_json::json!({ "offset": 0, "limit": limit, "sortBy": "AFFINITY", "timeRange": "SHORT_TERM" });

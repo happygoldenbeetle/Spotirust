@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{
+use gpui::{MouseDownEvent, 
     Animation, AnimationExt, AnyElement, App, Bounds, Context, CursorStyle, Div, MouseMoveEvent, FontWeight, ImageSource, InteractiveElement,
     IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString, Stateful,
     StatefulInteractiveElement, Styled, Task, Window, WindowControlArea, canvas, div, img,
@@ -20,6 +20,7 @@ mod create_menu;
 mod profile_menu;
 mod friends_view;
 mod browse_view;
+mod ctx_menu;
 mod library_view;
 mod user_view;
 mod playlist_view;
@@ -108,6 +109,10 @@ pub struct Shell {
     friends: Option<Vec<friends_view::Friend>>,
     jam_card_dismissed: bool,
     browse: Option<Vec<browse_view::BrowseCard>>,
+    /// Open right-click menu.
+    ctx_menu: Option<ctx_menu::CtxMenu>,
+    /// Sleep timer generation (a newer timer cancels older ones).
+    sleep_seq: u64,
     notifications: Option<Vec<profile_menu::Notification>>,
     profile_scroll: gpui::ScrollHandle,
     create_toggled_at: std::time::Instant,
@@ -273,6 +278,8 @@ impl Shell {
             friends: None,
             jam_card_dismissed: false,
             browse: None,
+            ctx_menu: None,
+            sleep_seq: 0,
             notifications: None,
             profile_scroll: gpui::ScrollHandle::new(),
             create_toggled_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
@@ -507,7 +514,8 @@ impl Shell {
         let k = &ev.keystroke;
         let ctrl = k.modifiers.control;
         let pb = self.playback.clone();
-        if k.key == "escape" && (self.lib_menu || self.create_open || self.profile_open) {
+        if k.key == "escape" && (self.lib_menu || self.create_open || self.profile_open || self.ctx_menu.is_some()) {
+            self.ctx_menu = None;
             self.lib_menu = false;
             self.create_open = false;
             self.profile_open = false;
@@ -1474,6 +1482,7 @@ impl Shell {
             .child(
                 div()
                     .id("library-list")
+                    .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _, cx| this.library_bg_ctx(ev.position, cx)))
                     .mt(px(8.))
                     .flex_1()
                     .min_h_0()
@@ -1628,6 +1637,7 @@ fn library_row(&self, index: usize, item: &LibItem, me_name: &str, cx: &mut Cont
     div()
         .id(gpui::ElementId::Name(group.clone()))
         .group(group.clone())
+        .on_mouse_down(MouseButton::Right, self.ctx_listener(item.uri.clone(), item.name.clone(), true, cx))
         .h(px(64.))
         .p(px(8.))
         .flex()
@@ -1745,6 +1755,7 @@ impl Shell {
         div()
             .id(gpui::ElementId::Name(group.clone()))
             .group(group.clone())
+            .on_mouse_down(MouseButton::Right, self.ctx_listener(item.uri.clone(), item.name.clone(), false, cx))
             .flex_1()
             .min_w_0()
             .h(px(tile_h))
@@ -1850,6 +1861,7 @@ impl Shell {
         div()
             .id(gpui::ElementId::Name(group.clone()))
             .group(group.clone())
+            .on_mouse_down(MouseButton::Right, self.ctx_listener(item.uri.clone(), item.name.clone(), false, cx))
             .w(px(w))
             .flex_none()
             .p(px(12.))
@@ -2651,6 +2663,7 @@ impl Render for Shell {
             .children(self.library_menu(cx))
             .children(self.create_menu(window, cx))
             .children(self.profile_menu(window, cx))
+            .children(self.ctx_menu_view(window, cx))
             .when_some(self.visible_toast(), |d, text| {
                 d.child(
                     div()

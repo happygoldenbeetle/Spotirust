@@ -368,6 +368,7 @@ impl Shell {
         let uri = item.uri.clone();
         div()
             .id(gpui::ElementId::Name(format!("lib-crow-{index}").into()))
+            .on_mouse_down(MouseButton::Right, self.ctx_listener(item.uri.clone(), item.name.clone(), true, cx))
             .h(px(32.))
             .pl(px(32.))
             .pr(px(8.))
@@ -409,6 +410,7 @@ impl Shell {
         let url = item.image.clone();
         div()
             .id(gpui::ElementId::Name(format!("lib-cell-{index}").into()))
+            .on_mouse_down(MouseButton::Right, self.ctx_listener(item.uri.clone(), item.name.clone(), true, cx))
             .w(px(w))
             .when(!compact, |d| d.h(px(184.)))
             .flex_none()
