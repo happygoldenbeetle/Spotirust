@@ -16,6 +16,7 @@ use gpui::{
 };
 
 mod artist_view;
+mod create_menu;
 mod library_view;
 mod user_view;
 mod playlist_view;
@@ -96,6 +97,14 @@ pub struct Shell {
     lib_view_seq: usize,
     /// Library panel hovered (slides the title right and reveals the collapse icon), and when.
     lib_hover: bool,
+    /// Create (+) menu open; hovered item and the last un-hovered one, with when (icon animation).
+    create_open: bool,
+    create_toggled_at: std::time::Instant,
+    /// When a menu was last closed by a click outside it: the click that closed it, if it lands on
+    /// the menu's own button, must not reopen it.
+    menu_closed_at: std::time::Instant,
+    create_hover: Option<(usize, std::time::Instant)>,
+    create_unhover: Option<(usize, std::time::Instant)>,
     lib_hover_at: std::time::Instant,
     /// Track URIs in Liked Songs (tracklists show a green check for these).
     liked: HashSet<String>,
@@ -236,6 +245,11 @@ impl Shell {
             lib_view_from: library_view::LibPrefs::load().view_index(),
             lib_view_seq: 0,
             lib_hover: false,
+            create_open: std::env::var_os("SPOTIRUST_CREATEMENU").is_some(),
+            create_hover: None,
+            create_toggled_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
+            menu_closed_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
+            create_unhover: None,
             lib_hover_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
             liked: HashSet::new(),
             artist_more: false,
@@ -253,6 +267,33 @@ impl Shell {
             this.connect_session(api, cx);
         }
         this
+    }
+
+    /// Re-reads Your Library (after creating or changing items).
+    fn reload_library(&mut self, cx: &mut Context<Self>) {
+        let Some(sp) = self.spotify.clone() else { return };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut items = library::parse(&sp.library(&[])?, "");
+                    let uris: Vec<String> = items.iter().filter(|i| i.kind == LibKind::Playlist).map(|i| i.uri.clone()).collect();
+                    if let Ok(mixed) = sp.mixed_playlists(&uris) {
+                        items.iter_mut().for_each(|i| i.mixed = mixed.contains(&i.uri));
+                    }
+                    anyhow::Ok(items)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(items) => {
+                    this.library = Some(items);
+                    this.resolve_mosaics(cx);
+                    cx.notify();
+                }
+                Err(e) => eprintln!("library reload: {e:#}"),
+            });
+        })
+        .detach();
     }
 
     /// librespot session (cached credentials) -> private Home feed.
@@ -429,8 +470,9 @@ impl Shell {
         let k = &ev.keystroke;
         let ctrl = k.modifiers.control;
         let pb = self.playback.clone();
-        if k.key == "escape" && self.lib_menu {
+        if k.key == "escape" && (self.lib_menu || self.create_open) {
             self.lib_menu = false;
+            self.create_open = false;
             cx.notify();
             return;
         }
@@ -1154,6 +1196,22 @@ impl Shell {
         }
         // measured: pill "Create" from a 332px panel, round 35px "+" below
         let create_pill = self.left_w >= 332.;
+        // open menu: the + rotates to an x and turns white (transform, color .2s ease-out)
+        let cms = self.create_toggled_at.elapsed().as_secs_f32() * 1000.;
+        let cp = crate::anim::ease_out(crate::anim::progress(cms, 0., 200.));
+        let cp = if self.create_open { cp } else { 1. - cp };
+        if cms < 200. {
+            window.request_animation_frame();
+        }
+        let plus = || {
+            let g = 0xB3 as f32 / 255.;
+            let v = g + (1. - g) * cp;
+            svg()
+                .path("icons/plus.svg")
+                .size(px(16.))
+                .with_transformation(gpui::Transformation::rotate(gpui::radians(std::f32::consts::FRAC_PI_4 * cp)))
+                .text_color(gpui::Rgba { r: v, g: v, b: v, a: 1. })
+        };
         div()
             .id("library-panel")
             .w(px(self.left_w))
@@ -1218,7 +1276,7 @@ impl Shell {
                                     .text_color(c(WHITE)),
                             ),
                     )
-                    .child(if create_pill {
+                    .child((if create_pill {
                         div()
                             .id("create")
                             .h(px(35.2))
@@ -1232,7 +1290,7 @@ impl Shell {
                             .bg(c(ELEVATED))
                             .hover(|s| s.bg(c(0x2A2A2A)))
                             .cursor_pointer()
-                            .child(icon("icons/plus.svg", 16., TEXT_SUBDUED))
+                            .child(plus())
                             .child(
                                 div()
                                     .text_size(px(14.))
@@ -1245,8 +1303,18 @@ impl Shell {
                         round_button("create", 35.)
                             .bg(c(ELEVATED))
                             .hover(|s| s.bg(c(0x2A2A2A)))
-                            .child(icon("icons/plus.svg", 16., TEXT_SUBDUED))
+                            .child(plus())
                     })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.create_open && this.menu_closed_at.elapsed().as_millis() < 400 {
+                            return;
+                        }
+                        this.create_open = !this.create_open;
+                        this.create_toggled_at = std::time::Instant::now();
+                        this.create_hover = None;
+                        this.create_unhover = None;
+                        cx.notify();
+                    })))
                     .child(
                         round_button("expand-library", 35.)
                             .h(px(35.2))
@@ -1326,6 +1394,9 @@ impl Shell {
                             .text_color(c(TEXT_SUBDUED))
                             .hover(|s| s.text_color(c(WHITE)))
                             .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.lib_menu && this.menu_closed_at.elapsed().as_millis() < 400 {
+                                    return;
+                                }
                                 this.lib_menu = !this.lib_menu;
                                 // opening: the View-as highlight starts on the current view (no slide)
                                 this.lib_view_from = this.lib_prefs.view_index();
@@ -2517,6 +2588,7 @@ impl Render for Shell {
             )
             .child(self.player_bar(cx))
             .children(self.library_menu(cx))
+            .children(self.create_menu(window, cx))
             .when_some(self.visible_toast(), |d, text| {
                 d.child(
                     div()

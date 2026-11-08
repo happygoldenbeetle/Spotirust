@@ -63,6 +63,21 @@ impl Api {
         })
     }
 
+    /// Creates a private playlist owned by `user_id` and returns its URI.
+    pub fn create_playlist(&self, user_id: &str, name: &str) -> Result<String> {
+        let path = format!("/users/{user_id}/playlists");
+        let v: serde_json::Value = crate::http::agent()
+            .post(&format!("https://api.spotify.com/v1{path}"))
+            .set("Authorization", &format!("Bearer {}", self.access_token()?))
+            .send_json(serde_json::json!({ "name": name, "public": false }))
+            .map_err(|e| match e {
+                ureq::Error::Status(code, r) => anyhow!("POST {path} -> {code}: {}", r.into_string().unwrap_or_default()),
+                e => anyhow!(e),
+            })?
+            .into_json()?;
+        v.get("uri").and_then(|u| u.as_str()).map(str::to_string).ok_or_else(|| anyhow!("POST {path}: no uri"))
+    }
+
     pub fn resume(&self) -> Result<()> {
         self.send("PUT", "/me/player/play", None)
     }

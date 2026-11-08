@@ -143,7 +143,7 @@ pub(super) fn sort_items(items: &mut [LibItem], prefs: LibPrefs) {
 
 const MENU_W: f32 = 208.;
 
-fn menu_list(top: bool) -> Div {
+pub(super) fn menu_list(top: bool) -> Div {
     div()
         .w(px(MENU_W))
         .p(px(4.))
@@ -278,6 +278,7 @@ impl Shell {
                 .occlude()
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.lib_menu = false;
+                    this.menu_closed_at = std::time::Instant::now();
                     cx.notify();
                 }))
                 .flex()
