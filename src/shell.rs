@@ -63,6 +63,8 @@ pub struct Shell {
     local_starting: bool,
     /// Last volume sent to another device while dragging (throttle).
     volume_sent: Instant,
+    /// What the user last asked for (held on screen until the player reports it).
+    intent: Intent,
     /// A command pressed before the built-in player was ready.
     local_pending: Option<Play>,
     home: Option<HomeFeed>,
@@ -216,6 +218,14 @@ enum Side {
     Right,
 }
 
+#[derive(Default)]
+struct Intent {
+    playing: Option<(bool, Instant)>,
+    volume: Option<(u32, Instant)>,
+    shuffle: Option<(bool, Instant)>,
+    repeat: Option<(String, Instant)>,
+}
+
 /// Where the background start of the built-in player leaves its result.
 type LocalSlot = Arc<std::sync::Mutex<Option<anyhow::Result<crate::player::LocalPlayer>>>>;
 
@@ -269,6 +279,7 @@ impl Shell {
             local_seq: 0,
             local_starting: false,
             volume_sent: Instant::now(),
+            intent: Intent::default(),
             local_pending: None,
             home: None,
             home_error: None,
@@ -621,6 +632,8 @@ impl Shell {
         self.playback_at = Instant::now();
         if let Some(st) = self.local.as_ref().map(|l| l.state()).filter(|s| s.loaded) {
             self.apply_local(&st);
+        } else {
+            self.hold_intent();
         }
         self.refresh_now_playing(cx);
     }
@@ -640,6 +653,67 @@ impl Shell {
             d.volume_percent = Some(v);
         }
         self.playback_at = Instant::now();
+        self.hold_intent();
+    }
+
+    /// Records what the user just asked for and shows it at once.
+    fn want(&mut self, cmd: &Play) {
+        let now = Instant::now();
+        match cmd {
+            Play::Resume | Play::Context(_) | Play::ContextAt(..) => self.intent.playing = Some((true, now)),
+            Play::Pause => self.intent.playing = Some((false, now)),
+            Play::Volume(v) => self.intent.volume = Some((*v, now)),
+            Play::Shuffle(on) => self.intent.shuffle = Some((*on, now)),
+            Play::Repeat(r) => self.intent.repeat = Some((r.clone(), now)),
+            _ => {}
+        }
+        // Show it now; only a report from the player / server checks it off (hold_intent).
+        let i = &self.intent;
+        if let Some(pb) = self.playback.as_mut() {
+            if let Some((p, _)) = i.playing {
+                if pb.is_playing != p {
+                    pb.is_playing = p;
+                }
+            }
+            if let (Some((v, _)), Some(d)) = (i.volume, pb.device.as_mut()) {
+                d.volume_percent = Some(v);
+            }
+            if let Some((s, _)) = i.shuffle {
+                pb.shuffle_state = s;
+            }
+            if let Some((r, _)) = &i.repeat {
+                pb.repeat_state = r.clone();
+            }
+        }
+    }
+
+    /// Player state from events / the server can briefly still carry the value from before a
+    /// press (the icon or volume knob would flick back). Until the source reports what was asked
+    /// for (or 2 s pass) the bar keeps showing the request.
+    fn hold_intent(&mut self) {
+        const HOLD: Duration = Duration::from_secs(2);
+        let Some(pb) = self.playback.as_mut() else { return };
+        let i = &mut self.intent;
+        fn keep<T: PartialEq + Clone>(slot: &mut Option<(T, Instant)>, shown: &mut T) {
+            match slot {
+                Some((want, at)) if at.elapsed() < HOLD => {
+                    if *shown == *want {
+                        *slot = None;
+                    } else {
+                        *shown = want.clone();
+                    }
+                }
+                _ => *slot = None,
+            }
+        }
+        keep(&mut i.playing, &mut pb.is_playing);
+        if let Some(d) = pb.device.as_mut() {
+            let mut v = d.volume_percent.unwrap_or(100);
+            keep(&mut i.volume, &mut v);
+            d.volume_percent = Some(v);
+        }
+        keep(&mut i.shuffle, &mut pb.shuffle_state);
+        keep(&mut i.repeat, &mut pb.repeat_state);
     }
 
     /// The built-in player moved to a new track: fetch its title/art/duration straight away
@@ -684,6 +758,8 @@ impl Shell {
     /// player; starting playback (play, or playing a page) pulls playback here from whichever
     /// device has it. Pause/skip/seek/volume on another device go through the Web API.
     fn player(&mut self, cmd: Play, cx: &mut Context<Self>) {
+        self.want(&cmd);
+        cx.notify();
         // Pressed while the built-in player is still starting: run it once it's ready.
         if self.local.is_none() && self.local_starting {
             self.local_pending = Some(cmd);
@@ -854,6 +930,7 @@ impl Shell {
     /// (for another device) through the Web API at most every 250 ms.
     fn live_volume(&mut self, f: f32, cx: &mut Context<Self>) {
         let v = (f * 100.).round() as u32;
+        self.intent.volume = Some((v, Instant::now()));
         if let Some(d) = self.playback.as_mut().and_then(|p| p.device.as_mut()) {
             d.volume_percent = Some(v);
         }
