@@ -73,14 +73,17 @@ fn ago(ms: i64) -> String {
     }
 }
 
-/// A rgba(255,255,255,.7) link that turns white and underlines on hover.
+/// A rgba(255,255,255,.7) link that turns white and underlines on hover, with its text as a
+/// native tooltip. Contexts without a page (Liked Songs, DJ) are plain text, as in the client.
 fn link(id: String, text: String, uri: String, cx: &mut Context<Shell>) -> Stateful<Div> {
-    div()
-        .id(gpui::ElementId::Name(id.into()))
-        .flex_none()
-        .cursor_pointer()
-        .text_color(rgba(0xFFFFFFB3))
+    let el = div().id(gpui::ElementId::Name(id.into())).min_w_0().overflow_hidden().text_color(rgba(0xFFFFFFB3));
+    let plain = uri.is_empty() || uri.ends_with(":collection") || uri.ends_with(":collection:tracks") || uri.contains(":station:") || uri.contains("37i9dQZF1EYkqdzj48dyYq");
+    if plain {
+        return el.child(text);
+    }
+    el.cursor_pointer()
         .hover(|s| s.text_color(c(WHITE)).underline())
+        .tooltip(native_tip(text.clone()))
         .on_click(cx.listener(move |this, _, _, cx| {
             if let Some(p) = Page::for_uri(&uri) {
                 this.open(p, cx);
@@ -94,8 +97,34 @@ impl Shell {
         self.right_panel = if self.right_panel == RightPanel::Friends { RightPanel::NowPlaying } else { RightPanel::Friends };
         if self.right_panel == RightPanel::Friends {
             self.load_friends(cx);
+            self.watch_friends(cx);
         }
         cx.notify();
+    }
+
+    /// While the panel is open, reload it whenever a friend's activity is pushed (the client
+    /// updates the list live) and once a minute so the "x min" times stay current.
+    fn watch_friends(&mut self, cx: &mut Context<Self>) {
+        let Some(sp) = self.spotify.clone() else { return };
+        cx.spawn(async move |this, cx| {
+            let mut seen = sp.presence_changes();
+            let mut ticks = 0;
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+                ticks += 1;
+                let now = sp.presence_changes();
+                let Ok(open) = this.update(cx, |this, _| this.right_panel == RightPanel::Friends) else { return };
+                if !open {
+                    return;
+                }
+                if now != seen || ticks >= 30 {
+                    seen = now;
+                    ticks = 0;
+                    let _ = this.update(cx, |this, cx| this.load_friends(cx));
+                }
+            }
+        })
+        .detach();
     }
 
     fn load_friends(&mut self, cx: &mut Context<Self>) {
@@ -200,6 +229,7 @@ impl Shell {
                     .child(
                         div()
                             .id(gpui::ElementId::Name(format!("friend-art-{i}").into()))
+                            .tooltip(native_tip(f.name.clone()))
                             .group(group.clone())
                             .relative()
                             .mt(px(2.))

@@ -460,13 +460,20 @@ impl Shell {
 
         // ---- On Tour ----
         let tour = (!page.concerts.is_empty()).then(|| {
-            let tcols = (((w - 24.) / 150.).floor() as usize).max(1);
-            let tile_w = (w - 24.) / tcols as f32;
-            let tiles = page.concerts.iter().enumerate().map(|(i, k)| {
+            // `.onTourShelfGrid`: 2 columns, 1 when the window is <= 992 wide, 3 when >= 1280; gap 8;
+            // the first 9 concerts. Items: `margin-left: -8px; padding: 8px`, grid 72px auto.
+            let vw = f32::from(window.viewport_size().width);
+            let tcols: usize = if vw <= 992. { 1 } else if vw >= 1280. { 3 } else { 2 };
+            let grid_w = w - 32.;
+            let cell_w = (grid_w - 8. * (tcols as f32 - 1.)) / tcols as f32;
+            let tile_w = cell_w + 8. - 0.01; // a hair under so rounding never wraps a row early
+            let info_w = (tile_w - 16. - 80.).max(0.); // padding 8+8, date column 72 + gap 8
+            let tiles = page.concerts.iter().take(9).enumerate().map(|(i, k)| {
                 let (month, day, time) = concert_date(&k.start);
                 div()
                     .id(gpui::ElementId::Name(format!("concert-{i}").into()))
                     .w(px(tile_w))
+                    .when(i % tcols == 0, |d| d.ml(px(-8.)))
                     .h(px(80.8))
                     .p(px(8.))
                     .flex_none()
@@ -498,22 +505,23 @@ impl Shell {
                             .flex_1()
                             .flex()
                             .flex_col()
-                            .child(one_line(k.city.clone()).text_size(px(16.)).line_height(px(22.4)).font_weight(FontWeight::BOLD).text_color(c(WHITE)))
-                            .child(one_line(k.title.clone()).mt(px(4.)).text_size(px(14.)).line_height(px(19.2)).text_color(c(TEXT_SUBDUED)))
-                            .child(one_line(format!("{time} \u{2022} {}", k.venue)).text_size(px(14.)).line_height(px(19.2)).text_color(c(TEXT_SUBDUED))),
+                            .child(one_line(k.city.clone()).w(px(info_w)).text_size(px(16.)).line_height(px(22.4)).font_weight(FontWeight::BOLD).text_color(c(WHITE)))
+                            .child(one_line(k.title.clone()).w(px(info_w)).mt(px(4.)).text_size(px(14.)).line_height(px(19.2)).text_color(c(TEXT_SUBDUED)))
+                            .child(one_line(format!("{time} \u{2022} {}", k.venue)).w(px(info_w)).text_size(px(14.)).line_height(px(19.2)).text_color(c(TEXT_SUBDUED))),
                     )
             });
             div()
                 .mt(px(40.))
                 .flex()
                 .flex_col()
-                .child(shelf_head("tour", "On Tour".into(), Some(format!("View all upcoming concerts ({})", page.concerts.len()))))
-                .child(div().mt(px(8.)).px(px(8.)).flex().flex_row().flex_wrap().gap_y(px(8.)).children(tiles))
+                .child(shelf_head("tour", "On Tour".into(), Some(format!("View all upcoming concerts ({})", page.concerts_total.max(page.concerts.len())))))
+                .child(div().mt(px(8.)).px(px(16.)).w(px(w)).flex().flex_row().flex_wrap().gap_y(px(8.)).children(tiles))
         });
 
         // ---- About ----
+        // `.qLRCOUHINaVfhHXdVtNi.rYVDSuYxVcgAONzJGphz`: full width, 516 tall, background-size cover.
         let about_w = w - 32.;
-        let about_h = about_w * 516. / 474.;
+        let about_h = 516.;
         let about_img = page.about_image.as_ref().and_then(|u| {
             let url = format!("crop:{about_w:.1}x{about_h:.1}:{u}");
             images::cache(cx).update(cx, |c, cx| c.get_sized(&url, about_w, cx))
@@ -541,12 +549,49 @@ impl Shell {
                         linear_color_stop(rgba(0x00000000), 0.),
                         linear_color_stop(rgba(0x000000B3), 1.),
                     )))
+                    .when(page.world_rank > 0, |d| {
+                        // 80px #0D72EA circle, top 40 / end 40; "#N" 24/700 at 25%, "in the world" 12 at 55%.
+                        d.child(
+                            div()
+                                .absolute()
+                                .top(px(40.))
+                                .right(px(40.))
+                                .size(px(80.))
+                                .rounded_full()
+                                .bg(c(0x0D72EA))
+                                .text_color(c(WHITE))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(20.))
+                                        .w_full()
+                                        .flex()
+                                        .justify_center()
+                                        .text_size(px(24.))
+                                        .line_height(px(28.8))
+                                        .font_weight(FontWeight::BOLD)
+                                        .font_family(title_font.family.clone())
+                                        .child(format!("#{}", page.world_rank)),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(44.))
+                                        .w_full()
+                                        .flex()
+                                        .justify_center()
+                                        .text_size(px(12.))
+                                        .line_height(px(16.8))
+                                        .child("in the world"),
+                                ),
+                        )
+                    })
                     .child(
                         div()
                             .absolute()
                             .left_0()
-                            .right_0()
                             .bottom_0()
+                            .w(px(about_w.min(672.)))
                             .p(px(40.))
                             .flex()
                             .flex_col()

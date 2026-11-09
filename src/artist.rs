@@ -13,6 +13,10 @@ pub struct ArtistPage {
     pub name: String,
     pub verified: bool,
     pub monthly_listeners: u64,
+    /// "#N in the world" badge on the About card (0 = none).
+    pub world_rank: u64,
+    /// `goods.concerts.totalCount` (the "View all upcoming concerts (N)" count).
+    pub concerts_total: usize,
     /// Wide header image (the client loads the `0194` rendition).
     pub header_image: Option<String>,
     pub avatar: Option<String>,
@@ -226,6 +230,8 @@ pub fn parse(v: &Value) -> Option<ArtistPage> {
         name: str_at(a, "/profile/name").to_owned(),
         verified: a.pointer("/onPlatformReputationTrait/verification/isVerified").and_then(Value::as_bool).unwrap_or(false),
         monthly_listeners: a.pointer("/stats/monthlyListeners").and_then(Value::as_u64).unwrap_or(0),
+        world_rank: a.pointer("/stats/worldRank").and_then(Value::as_u64).unwrap_or(0),
+        concerts_total: a.pointer("/goods/concerts/totalCount").and_then(Value::as_u64).unwrap_or(0) as usize,
         header_image,
         avatar: artist_item(a).image,
         color: rgb(a.pointer("/visualIdentity/wideFullBleedImage/extractedColorSet/higherContrast/backgroundBase"))

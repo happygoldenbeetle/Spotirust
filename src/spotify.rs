@@ -35,6 +35,8 @@ pub struct Spotify {
     rt: tokio::runtime::Runtime,
     session: Session,
     web: Mutex<Token>,
+    connection: Mutex<Option<String>>,
+    presence_changes: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn cache_dir() -> PathBuf {
@@ -69,7 +71,7 @@ impl Spotify {
             session.connect(credentials, true).await.context("librespot connect")?;
             anyhow::Ok(session)
         })?;
-        Ok(Self { rt, session, web: Mutex::new(web) })
+        Ok(Self { rt, session, web: Mutex::new(web), connection: Mutex::new(None), presence_changes: Default::default() })
     }
 
     fn web_token(&self) -> Result<String> {
@@ -172,9 +174,13 @@ impl Spotify {
 
     /// Blocking: GET on spclient (`spclient.wg.spotify.com<path>`) with the session's tokens, as JSON.
     fn spclient_json(&self, path: &str) -> Result<serde_json::Value> {
+        self.spclient_json_at("spclient.wg.spotify.com", path)
+    }
+
+    fn spclient_json_at(&self, host: &str, path: &str) -> Result<serde_json::Value> {
         let (bearer, client_token) = self.partner_tokens()?;
         crate::http::agent()
-            .get(&format!("https://spclient.wg.spotify.com{path}"))
+            .get(&format!("https://{host}{path}"))
             .set("authorization", &format!("Bearer {bearer}"))
             .set("client-token", &client_token)
             .set("accept", "application/json")
@@ -210,10 +216,60 @@ impl Spotify {
 
     /// Blocking: what friends are listening to (`presence-view/v1/buddylist`), for the
     /// Listening activity panel.
+    /// The dealer (push) connection's id, starting the connection on first use. The friend feed
+    /// is keyed on it, and friends' activity changes arrive on `hm://presence2/user/...`, which
+    /// bump `presence_changes`.
+    fn connection_id(&self) -> Result<String> {
+        let mut conn = self.connection.lock().unwrap();
+        if let Some(id) = conn.clone() {
+            return Ok(id);
+        }
+        let changes = self.presence_changes.clone();
+        let id = self.rt.block_on(async {
+            use futures_util::StreamExt;
+            let dealer = self.session.dealer();
+            let mut ids = dealer.listen_for("hm://pusher/v1/connections/", |m| {
+                Ok(m.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("Spotify-Connection-Id")).map(|(_, v)| v.clone()))
+            })?;
+            let mut presence = dealer.listen_for("hm://presence2/user", |_| Ok(()))?;
+            dealer.start().await?;
+            tokio::spawn(async move {
+                while presence.next().await.is_some() {
+                    changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+            let id = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while let Some(m) = ids.next().await {
+                    if let Ok(Some(id)) = m {
+                        return Some(id);
+                    }
+                }
+                None
+            })
+            .await
+            .ok()
+            .flatten();
+            id.ok_or_else(|| anyhow!("no dealer connection id"))
+        })?;
+        *conn = Some(id.clone());
+        Ok(id)
+    }
+
+    /// Counter bumped whenever a friend's listening activity changes.
+    pub fn presence_changes(&self) -> u64 {
+        self.presence_changes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn buddylist(&self) -> Result<serde_json::Value> {
-        // The client also opens `v2/init-friend-feed/{dealer connection}`, but that only
-        // subscribes to live updates (its first response is empty); v1 returns the list.
-        let v = self.spclient_json("/presence-view/v1/buddylist")?;
+        // As the client does: `v2/init-friend-feed/{dealer connection id}` returns the current
+        // list (and subscribes the connection to updates). `v1/buddylist` lags by days.
+        let v = match self.connection_id() {
+            Ok(id) => self.spclient_json(&format!("/presence-view/v2/init-friend-feed/{id}"))?,
+            Err(e) => {
+                eprintln!("dealer: {e:#}");
+                self.spclient_json("/presence-view/v1/buddylist")?
+            }
+        };
         dump("buddylist", &v);
         Ok(v)
     }

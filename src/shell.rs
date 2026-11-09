@@ -21,6 +21,8 @@ mod profile_menu;
 mod friends_view;
 mod browse_view;
 mod ctx_menu;
+mod native_tip;
+use native_tip::native_tip;
 mod library_view;
 mod user_view;
 mod playlist_view;
@@ -395,6 +397,14 @@ impl Shell {
                 match result {
                     Ok((sp, feed, lib)) => {
                         this.spotify = Some(sp);
+                        // Test hook: open Listening activity without clicking (captures).
+                        if std::env::var_os("SPOTIRUST_OPEN_FRIENDS").is_some() {
+                            this.toggle_friends(cx);
+                        }
+                        // Test hook: start on a page (`SPOTIRUST_OPEN=spotify:artist:...`).
+                        if let Some(p) = std::env::var("SPOTIRUST_OPEN").ok().as_deref().and_then(Page::for_uri) {
+                            this.open(p, cx);
+                        }
                         this.load_page(LIKED_URI.to_string(), cx);
                         if lib.is_some() {
                             this.library = lib;
@@ -2645,13 +2655,30 @@ impl Render for Shell {
                     .flex_row()
                     .child(self.library(window, cx))
                     .child(self.resize_bar(Side::Left, cx))
-                    .child(match self.page.clone() {
-                        Page::Home => self.home_view(main_w, cx).into_any_element(),
-                        Page::Playlist(uri) | Page::Album(uri) => self.playlist_view(&uri, main_w, window, cx),
-                        Page::Liked => self.playlist_view(LIKED_URI, main_w, window, cx),
-                        Page::Browse => self.browse_view(main_w, window, cx),
-                        Page::Artist(uri) => self.artist_view(&uri, main_w, window, cx),
-                        Page::User(uri) => self.user_view(&uri, main_w, window, cx),
+                    .child({
+                        let page = match self.page.clone() {
+                            Page::Home => self.home_view(main_w, cx).into_any_element(),
+                            Page::Playlist(uri) | Page::Album(uri) => self.playlist_view(&uri, main_w, window, cx),
+                            Page::Liked => self.playlist_view(LIKED_URI, main_w, window, cx),
+                            Page::Browse => self.browse_view(main_w, window, cx),
+                            Page::Artist(uri) => self.artist_view(&uri, main_w, window, cx),
+                            Page::User(uri) => self.user_view(&uri, main_w, window, cx),
+                        };
+                        // GPUI clips children to the panel's rectangle, not its 8px rounded corners, so
+                        // full-bleed content (sticky header, About image) would square them off: mask
+                        // the corners with the window background, as the client's rounded clip does.
+                        let corner = |path: &'static str| svg().path(path).size(px(8.)).absolute().text_color(c(0x000000));
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .child(page)
+                            .child(corner("icons/corner_tl.svg").top_0().left_0())
+                            .child(corner("icons/corner_tr.svg").top_0().right_0())
+                            .child(corner("icons/corner_bl.svg").bottom_0().left_0())
+                            .child(corner("icons/corner_br.svg").bottom_0().right_0())
                     })
                     .child(self.resize_bar(Side::Right, cx))
                     .child(match self.right_panel {
