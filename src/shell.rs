@@ -278,6 +278,8 @@ struct Intent {
     volume: Option<(u32, Instant)>,
     shuffle: Option<(bool, Instant)>,
     repeat: Option<(String, Instant)>,
+    /// Seek target and when it was asked for.
+    seek: Option<(u64, Instant)>,
 }
 
 /// Where the background start of the built-in player leaves its result.
@@ -692,6 +694,17 @@ impl Shell {
                 }
             }
         }
+        // Another device is playing and the built-in player has been idle a while: its leftover
+        // (paused) track isn't the playback any more, so stop letting it override the server's.
+        if let (Some(local), Some(new)) = (self.local.as_ref(), pb.as_ref()) {
+            let st = local.state();
+            let other = new.device.as_ref().and_then(|d| d.id.as_deref()).is_some_and(|d| d != local.device_id);
+            let idle = st.at.is_none_or(|t| t.elapsed() > Duration::from_secs(3));
+            if st.loaded && !st.playing && other && new.is_playing && idle {
+                local.release();
+                self.local_seq = local.state().seq;
+            }
+        }
         self.playback = pb;
         self.playback_at = Instant::now();
         if let Some(st) = self.local.as_ref().map(|l| l.state()).filter(|s| s.loaded) {
@@ -729,9 +742,20 @@ impl Shell {
             Play::Volume(v) => self.intent.volume = Some((*v, now)),
             Play::Shuffle(on) => self.intent.shuffle = Some((*on, now)),
             Play::Repeat(r) => self.intent.repeat = Some((r.clone(), now)),
-            _ => {}
+            Play::Seek(ms) => self.intent.seek = Some((*ms, now)),
+            Play::Next | Play::Prev => {}
+        }
+        // A new track starts from its own position.
+        if matches!(cmd, Play::Next | Play::Prev | Play::Context(_) | Play::ContextAt(..)) {
+            self.intent.seek = None;
         }
         // Show it now; only a report from the player / server checks it off (hold_intent).
+        if let Play::Seek(ms) = cmd {
+            if let Some(pb) = self.playback.as_mut() {
+                pb.progress_ms = Some(*ms);
+            }
+            self.playback_at = now;
+        }
         let i = &self.intent;
         if let Some(pb) = self.playback.as_mut() {
             if let Some((p, _)) = i.playing {
@@ -778,6 +802,18 @@ impl Shell {
         }
         keep(&mut i.shuffle, &mut pb.shuffle_state);
         keep(&mut i.repeat, &mut pb.repeat_state);
+        // A seek: the server (and briefly the player) keeps reporting the old position. Until a
+        // report lands near the target (or 3 s pass), show the target running on from the press.
+        if let Some((ms, at)) = i.seek {
+            let expected = ms + if pb.is_playing { at.elapsed().as_millis() as u64 } else { 0 };
+            let reported = pb.progress_ms.unwrap_or(0);
+            if at.elapsed() >= Duration::from_secs(3) || reported.abs_diff(expected) < 1500 {
+                i.seek = None;
+            } else {
+                pb.progress_ms = Some(expected);
+                self.playback_at = Instant::now();
+            }
+        }
     }
 
     /// The built-in player moved to a new track: fetch its title/art/duration straight away

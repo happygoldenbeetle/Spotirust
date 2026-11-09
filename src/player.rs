@@ -145,6 +145,16 @@ impl LocalPlayer {
         self.state.lock().unwrap().clone()
     }
 
+    /// Playback moved to another device: forget the stale track here (its paused position must
+    /// not override the device that's actually playing) and keep the speakers quiet.
+    pub fn release(&self) {
+        self.out.pause();
+        let mut s = self.state.lock().unwrap();
+        s.playing = false;
+        s.loaded = false;
+        s.seq += 1;
+    }
+
     fn loaded(&self) -> bool {
         self.state.lock().unwrap().loaded
     }
