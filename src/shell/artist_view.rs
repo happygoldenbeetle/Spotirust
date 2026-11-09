@@ -157,7 +157,7 @@ impl Shell {
                             this.toggle_play(cx);
                         } else {
                             let uri = page_uri.clone();
-                            this.command(move |api| api.play_context(&uri), cx);
+                            this.player(Play::Context(uri.clone()), cx);
                         }
                     }))
                     .child(icon(if is_playing { "icons/pause24.svg" } else { "icons/play24.svg" }, 24., 0x000000)),

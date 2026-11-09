@@ -382,7 +382,7 @@ impl Shell {
             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                 if ev.click_count() == 2 {
                     if let Some(u) = play_uri.clone() {
-                        this.command(move |api| api.play_context(&u), cx);
+                        this.player(Play::Context(u.clone()), cx);
                     }
                 } else {
                     this.open_lib_item(&uri, cx);
@@ -422,7 +422,7 @@ impl Shell {
             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                 if ev.click_count() == 2 {
                     if let Some(u) = play_uri.clone() {
-                        this.command(move |api| api.play_context(&u), cx);
+                        this.player(Play::Context(u.clone()), cx);
                     }
                 } else {
                     this.open_lib_item(&uri, cx);

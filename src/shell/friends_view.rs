@@ -253,7 +253,7 @@ impl Shell {
                                     .group_hover(group.clone(), |s| s.opacity(1.))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         let (ctx, track) = (play_ctx.clone(), play_track.clone());
-                                        this.command(move |a| a.play_context_at(&ctx, &track), cx);
+                                        this.player(Play::ContextAt(ctx.clone(), track.clone()), cx);
                                     }))
                                     .child(svg().path("icons/play_tri.svg").size(px(16.)).text_color(c(WHITE))),
                             ),

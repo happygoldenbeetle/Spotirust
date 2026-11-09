@@ -368,6 +368,8 @@ pub struct Track {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Device {
+    #[serde(default)]
+    pub id: Option<String>,
     pub name: String,
     pub volume_percent: Option<u32>,
 }

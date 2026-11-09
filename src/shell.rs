@@ -56,6 +56,10 @@ pub struct Shell {
     playback_at: Instant,
     _poll: Option<Task<()>>,
     spotify: Option<Arc<Spotify>>,
+    /// The built-in Connect device (librespot player), once started.
+    local: Option<Arc<crate::player::LocalPlayer>>,
+    /// Last local player event handled (`LocalState::seq`).
+    local_seq: u64,
     home: Option<HomeFeed>,
     home_error: Option<String>,
     /// Header tint; follows the hovered shortcut like the real client.
@@ -207,6 +211,20 @@ enum Side {
     Right,
 }
 
+/// A player command; goes to the built-in device when it can (instant), else the Web API.
+pub enum Play {
+    Resume,
+    Pause,
+    Next,
+    Prev,
+    Seek(u64),
+    Volume(u32),
+    Shuffle(bool),
+    Repeat(String),
+    Context(String),
+    ContextAt(String, String),
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Slider {
     Seek,
@@ -239,6 +257,8 @@ impl Shell {
             playback_at: Instant::now(),
             _poll: None,
             spotify: None,
+            local: None,
+            local_seq: 0,
             home: None,
             home_error: None,
             home_color: HOME_DEFAULT_COLOR,
@@ -396,7 +416,8 @@ impl Shell {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok((sp, feed, lib)) => {
-                        this.spotify = Some(sp);
+                        this.spotify = Some(sp.clone());
+                        this.start_local(sp, cx);
                         // Test hook: open Listening activity without clicking (captures).
                         if std::env::var_os("SPOTIRUST_OPEN_FRIENDS").is_some() {
                             this.toggle_friends(cx);
@@ -505,6 +526,110 @@ impl Shell {
         .detach();
     }
 
+    /// Starts the built-in "Spotirust" Connect device and mirrors its events into the player bar.
+    fn start_local(&mut self, sp: Arc<Spotify>, cx: &mut Context<Self>) {
+        if std::env::var_os("SPOTIRUST_NO_PLAYER").is_some() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let local = match cx.background_executor().spawn(async move { sp.start_player() }).await {
+                Ok(l) => Arc::new(l),
+                Err(e) => {
+                    eprintln!("local player: {e:#}");
+                    return;
+                }
+            };
+            eprintln!("local player: registered as {}", local.device_id);
+            if this.update(cx, |this, _| this.local = Some(local.clone())).is_err() {
+                return;
+            }
+            loop {
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+                let st = local.state();
+                let alive = this.update(cx, |this, cx| {
+                    if st.seq == this.local_seq {
+                        return;
+                    }
+                    this.local_seq = st.seq;
+                    if !this.local_active() {
+                        return;
+                    }
+                    let track_changed = this.playing_track_id().map(|id| format!("spotify:track:{id}")) != Some(st.track_uri.clone());
+                    if let Some(pb) = this.playback.as_mut() {
+                        let drift = st.at.map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+                        pb.is_playing = st.playing;
+                        pb.progress_ms = Some(st.position_ms as u64 + if st.playing { drift } else { 0 });
+                        this.playback_at = Instant::now();
+                    }
+                    if track_changed && !st.track_uri.is_empty() {
+                        // New track: title, art and duration come from the Web API.
+                        this.command(|_| Ok(()), cx);
+                    }
+                    cx.notify();
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Whether the built-in device is the one playing.
+    fn local_active(&self) -> bool {
+        let Some(local) = &self.local else { return false };
+        let dev = self.playback.as_ref().and_then(|p| p.device.as_ref()).and_then(|d| d.id.as_deref());
+        dev == Some(local.device_id.as_str()) || local.state().loaded
+    }
+
+    /// Runs a player command. While Spotirust is the active device it goes straight to the local
+    /// player; starting playback (play, or playing a page) pulls playback here from whichever
+    /// device has it. Pause/skip/seek/volume on another device go through the Web API.
+    fn player(&mut self, cmd: Play, cx: &mut Context<Self>) {
+        if let Some(local) = self.local.clone() {
+            let active = self.local_active();
+            let starts = matches!(cmd, Play::Resume | Play::Context(_) | Play::ContextAt(..));
+            if active || starts {
+                let res = match &cmd {
+                    Play::Resume if active => local.play(),
+                    Play::Resume => local.take_over(true),
+                    Play::Pause => local.pause(),
+                    Play::Next => local.next(),
+                    Play::Prev => local.prev(),
+                    Play::Seek(ms) => local.seek(*ms),
+                    Play::Volume(v) => local.set_volume(*v),
+                    Play::Shuffle(on) => local.shuffle(*on),
+                    Play::Repeat(r) => local.repeat(r),
+                    Play::Context(c) => local.play_context(c, None),
+                    Play::ContextAt(c, t) => local.play_context(c, Some(t)),
+                };
+                match res {
+                    Ok(()) => {
+                        // Events update the bar at once; this picks up metadata.
+                        self.command(|_| Ok(()), cx);
+                        return;
+                    }
+                    Err(e) => eprintln!("local player: {e:#}"),
+                }
+            }
+        }
+        self.command(
+            move |api| match cmd {
+                Play::Resume => api.resume(),
+                Play::Pause => api.pause(),
+                Play::Next => api.next(),
+                Play::Prev => api.previous(),
+                Play::Seek(ms) => api.seek(ms),
+                Play::Volume(v) => api.set_volume(v),
+                Play::Shuffle(on) => api.set_shuffle(on),
+                Play::Repeat(r) => api.set_repeat(&r),
+                Play::Context(c) => api.play_context(&c),
+                Play::ContextAt(c, t) => api.play_context_at(&c, &t),
+            },
+            cx,
+        );
+    }
+
     fn toggle_play(&mut self, cx: &mut Context<Self>) {
         let playing = self.playback.as_ref().is_some_and(|p| p.is_playing);
         // Optimistic: freeze/unfreeze the progress clock immediately.
@@ -515,7 +640,7 @@ impl Shell {
             self.playback_at = Instant::now();
         }
         cx.notify();
-        self.command(move |api| if playing { api.pause() } else { api.resume() }, cx);
+        self.player(if playing { Play::Pause } else { Play::Resume }, cx);
     }
 
     /// The desktop client's playback shortcuts: Space play/pause, Ctrl+Right/Left next/previous,
@@ -534,8 +659,8 @@ impl Shell {
         }
         match (k.key.as_str(), ctrl) {
             ("space", false) if !ev.is_held => self.toggle_play(cx),
-            ("right", true) => self.command(|api| api.next(), cx),
-            ("left", true) => self.command(|api| api.previous(), cx),
+            ("right", true) => self.player(Play::Next, cx),
+            ("left", true) => self.player(Play::Prev, cx),
             ("up", true) | ("down", true) => {
                 let cur = pb.as_ref().and_then(|p| p.device.as_ref()).and_then(|d| d.volume_percent).unwrap_or(100) as i32;
                 let v = (cur + if k.key == "up" { 10 } else { -10 }).clamp(0, 100) as u32;
@@ -543,11 +668,11 @@ impl Shell {
                     d.volume_percent = Some(v);
                 }
                 cx.notify();
-                self.command(move |api| api.set_volume(v), cx);
+                self.player(Play::Volume(v), cx);
             }
             ("s", true) => {
                 let on = !pb.as_ref().is_some_and(|p| p.shuffle_state);
-                self.command(move |api| api.set_shuffle(on), cx);
+                self.player(Play::Shuffle(on), cx);
             }
             ("r", true) => {
                 // off -> context -> track -> off, like the repeat button
@@ -556,7 +681,7 @@ impl Shell {
                     Some("context") => "track",
                     _ => "off",
                 };
-                self.command(move |api| api.set_repeat(next), cx);
+                self.player(Play::Repeat(next.to_string()), cx);
             }
             _ => return,
         }
@@ -574,14 +699,14 @@ impl Shell {
                     pb.progress_ms = Some(ms);
                 }
                 self.playback_at = Instant::now();
-                self.command(move |api| api.seek(ms), cx);
+                self.player(Play::Seek(ms), cx);
             }
             Slider::Volume => {
                 let v = (f * 100.).round() as u32;
                 if let Some(d) = self.playback.as_mut().and_then(|p| p.device.as_mut()) {
                     d.volume_percent = Some(v);
                 }
-                self.command(move |api| api.set_volume(v), cx);
+                self.player(Play::Volume(v), cx);
             }
         }
         cx.notify();
@@ -822,7 +947,7 @@ impl Shell {
             },
             _ => item.uri.clone(),
         };
-        self.command(move |api| api.play_context(&uri), cx);
+        self.player(Play::Context(uri.clone()), cx);
     }
 
     fn select_chip(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1638,7 +1763,7 @@ fn library_row(&self, index: usize, item: &LibItem, me_name: &str, cx: &mut Cont
                             this.toggle_play(cx);
                         } else {
                             let uri = uri.clone();
-                            this.command(move |api| api.play_context(&uri), cx);
+                            this.player(Play::Context(uri.clone()), cx);
                         }
                     }))
                     .child(icon(if playing { "icons/pause24.svg" } else { "icons/play24.svg" }, 24., WHITE)),
@@ -1661,7 +1786,7 @@ fn library_row(&self, index: usize, item: &LibItem, me_name: &str, cx: &mut Cont
         .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
             if ev.click_count() == 2 {
                 if let Some(uri) = play_uri.clone() {
-                    this.command(move |api| api.play_context(&uri), cx);
+                    this.player(Play::Context(uri.clone()), cx);
                 }
             } else if let Some(p) = open_page.clone() {
                 this.open(p, cx);
@@ -2355,12 +2480,12 @@ impl Shell {
                             .child(
                                 ctl("shuffle", "icons/shuffle.svg", shuffle)
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.command(move |api| api.set_shuffle(!shuffle), cx)
+                                        this.player(Play::Shuffle(!shuffle), cx)
                                     })),
                             )
                             .child(
                                 ctl("prev", "icons/prev.svg", false)
-                                    .on_click(cx.listener(|this, _, _, cx| this.command(|api| api.previous(), cx))),
+                                    .on_click(cx.listener(|this, _, _, cx| this.player(Play::Prev, cx))),
                             ),
                     )
                     .child(
@@ -2377,12 +2502,12 @@ impl Shell {
                             .gap(px(8.))
                             .child(
                                 ctl("next", "icons/next.svg", false)
-                                    .on_click(cx.listener(|this, _, _, cx| this.command(|api| api.next(), cx))),
+                                    .on_click(cx.listener(|this, _, _, cx| this.player(Play::Next, cx))),
                             )
                             .child(
                                 ctl("repeat", "icons/repeat.svg", repeat != "off" && !repeat.is_empty())
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.command(move |api| api.set_repeat(next_repeat), cx)
+                                        this.player(Play::Repeat(next_repeat.to_string()), cx)
                                     })),
                             ),
                     ),
@@ -2442,7 +2567,7 @@ impl Shell {
                             .group("mute")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let target = if volume == 0 { 50 } else { 0 };
-                                this.command(move |api| api.set_volume(target), cx)
+                                this.player(Play::Volume(target), cx)
                             }))
                             .child(
                                 svg()

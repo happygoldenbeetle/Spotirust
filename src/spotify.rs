@@ -255,6 +255,11 @@ impl Spotify {
         Ok(id)
     }
 
+    /// Blocking: starts the built-in Connect device on this runtime.
+    pub fn start_player(&self) -> Result<crate::player::LocalPlayer> {
+        crate::player::LocalPlayer::start(&self.rt)
+    }
+
     /// Counter bumped whenever a friend's listening activity changes.
     pub fn presence_changes(&self) -> u64 {
         self.presence_changes.load(std::sync::atomic::Ordering::Relaxed)
