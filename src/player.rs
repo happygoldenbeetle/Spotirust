@@ -10,15 +10,16 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 use librespot_connect::{ConnectConfig, LoadRequest, LoadRequestOptions, PlayingTrack, Spirc};
 use librespot_core::{SessionConfig, cache::Cache, config::DeviceType, session::Session};
 use librespot_playback::{
-    audio_backend,
-    config::{AudioFormat, PlayerConfig},
-    mixer::{self, MixerConfig},
+    config::PlayerConfig,
+    mixer::Mixer,
     player::{Player, PlayerEvent},
 };
+
+use crate::audio_out::{OutMixer, OutSink, Output};
 
 /// What the local player is doing, from its own events (instant, unlike Web API polling).
 #[derive(Clone, Debug, Default)]
@@ -44,6 +45,9 @@ pub struct LocalPlayer {
     pub device_id: String,
     state: Arc<Mutex<LocalState>>,
     rt: tokio::runtime::Handle,
+    /// Our output stage: pause / volume / flush act on it directly, before Spirc catches up.
+    out: Arc<Output>,
+    mixer: Arc<OutMixer>,
 }
 
 fn data_dir() -> PathBuf {
@@ -71,17 +75,19 @@ impl LocalPlayer {
     pub fn start(rt: &tokio::runtime::Runtime) -> Result<Self> {
         let state = Arc::new(Mutex::new(LocalState::default()));
         let st = state.clone();
+        let out = Output::start()?;
+        let mixer = Arc::new(OutMixer::new(out.clone(), u16::MAX / 2));
+        let (out2, mixer2) = (out.clone(), mixer.clone());
         let (spirc, device_id) = rt.block_on(async move {
+            let (out, mixer) = (out2, mixer2);
             let cache = Cache::new(Some(data_dir().join("librespot")), None, None, None)?;
             let credentials = cache.credentials().context("no cached Spotify credentials")?;
             let device_id = device_id();
             let session = Session::new(SessionConfig { device_id: device_id.clone(), ..SessionConfig::default() }, Some(cache));
 
-            let mixer_fn = mixer::find(None).ok_or_else(|| anyhow!("no mixer"))?;
-            let mixer = mixer_fn(MixerConfig::default())?;
-            let backend = audio_backend::find(None).ok_or_else(|| anyhow!("no audio backend"))?;
+            let sink_out = out.clone();
             let player = Player::new(PlayerConfig::default(), session.clone(), mixer.get_soft_volume(), move || {
-                backend(None, AudioFormat::default())
+                Box::new(OutSink(sink_out))
             });
 
             let mut events = player.get_player_event_channel();
@@ -128,35 +134,52 @@ impl LocalPlayer {
                 initial_volume: u16::MAX / 2,
                 ..ConnectConfig::default()
             };
-            let (spirc, task) = Spirc::new(config, session, credentials, player, mixer).await?;
+            let (spirc, task) = Spirc::new(config, session, credentials, player, mixer as Arc<dyn Mixer>).await?;
             tokio::spawn(task);
             anyhow::Ok((spirc, device_id))
         })?;
-        Ok(Self { spirc: Arc::new(spirc), device_id, state, rt: rt.handle().clone() })
+        Ok(Self { spirc: Arc::new(spirc), device_id, state, rt: rt.handle().clone(), out, mixer })
     }
 
     pub fn state(&self) -> LocalState {
         self.state.lock().unwrap().clone()
     }
 
+    fn loaded(&self) -> bool {
+        self.state.lock().unwrap().loaded
+    }
+
+    /// Resumes the output at once (the audio queued before the pause), then tells Spirc.
     pub fn play(&self) -> Result<()> {
+        if self.loaded() {
+            self.out.resume();
+        }
         Ok(self.spirc.play()?)
     }
+    /// Silences the output at once, then tells Spirc (which pauses the decoder and the server).
     pub fn pause(&self) -> Result<()> {
+        if self.loaded() {
+            self.out.pause();
+        }
         Ok(self.spirc.pause()?)
     }
     pub fn next(&self) -> Result<()> {
+        self.out.flush();
         Ok(self.spirc.next()?)
     }
     pub fn prev(&self) -> Result<()> {
+        self.out.flush();
         Ok(self.spirc.prev()?)
     }
     pub fn seek(&self, ms: u64) -> Result<()> {
+        self.out.flush();
         Ok(self.spirc.set_position_ms(ms.min(u32::MAX as u64) as u32)?)
     }
-    /// 0..=100
+    /// 0..=100. Applied to the output immediately; Spirc then reports it to Spotify.
     pub fn set_volume(&self, percent: u32) -> Result<()> {
-        Ok(self.spirc.set_volume((percent.min(100) as f32 / 100. * u16::MAX as f32) as u16)?)
+        let v = (percent.min(100) as f32 / 100. * u16::MAX as f32).round() as u16;
+        self.mixer.set_volume(v);
+        Ok(self.spirc.set_volume(v)?)
     }
     pub fn shuffle(&self, on: bool) -> Result<()> {
         Ok(self.spirc.shuffle(on)?)
@@ -176,6 +199,7 @@ impl LocalPlayer {
     /// Activates and loads `context` at `track` / `seek_ms`, playing or paused.
     pub fn load(&self, context: &str, track: Option<&str>, seek_ms: u64, start_playing: bool) -> Result<()> {
         self.spirc.activate()?;
+        self.out.flush();
         let options = LoadRequestOptions {
             start_playing,
             seek_to: seek_ms.min(u32::MAX as u64) as u32,

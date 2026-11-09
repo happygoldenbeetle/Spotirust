@@ -60,6 +60,11 @@ pub struct Shell {
     local: Option<Arc<crate::player::LocalPlayer>>,
     /// Last local player event handled (`LocalState::seq`).
     local_seq: u64,
+    local_starting: bool,
+    /// Last volume sent to another device while dragging (throttle).
+    volume_sent: Instant,
+    /// A command pressed before the built-in player was ready.
+    local_pending: Option<Play>,
     home: Option<HomeFeed>,
     home_error: Option<String>,
     /// Header tint; follows the hovered shortcut like the real client.
@@ -211,6 +216,9 @@ enum Side {
     Right,
 }
 
+/// Where the background start of the built-in player leaves its result.
+type LocalSlot = Arc<std::sync::Mutex<Option<anyhow::Result<crate::player::LocalPlayer>>>>;
+
 /// A player command; goes to the built-in device when it can (instant), else the Web API.
 pub enum Play {
     Resume,
@@ -259,6 +267,9 @@ impl Shell {
             spotify: None,
             local: None,
             local_seq: 0,
+            local_starting: false,
+            volume_sent: Instant::now(),
+            local_pending: None,
             home: None,
             home_error: None,
             home_color: HOME_DEFAULT_COLOR,
@@ -361,6 +372,12 @@ impl Shell {
                 .background_executor()
                 .spawn(async move {
                     let sp = Arc::new(Spotify::connect(web)?);
+                    // The built-in player starts right away, alongside the library / Home loads.
+                    let local_slot: LocalSlot = Arc::new(std::sync::Mutex::new(None));
+                    if std::env::var_os("SPOTIRUST_NO_PLAYER").is_none() {
+                        let (sp, slot) = (sp.clone(), local_slot.clone());
+                        std::thread::spawn(move || *slot.lock().unwrap() = Some(sp.start_player()));
+                    }
                     // Debug: SPOTIRUST_DUMP_PLAYLIST="<uri>|<out.json>" writes the raw fetchPlaylist response.
                     if let Some((uri, out)) = std::env::var("SPOTIRUST_DUMP_PLAYLIST").ok().as_deref().and_then(|s| s.split_once('|')) {
                         match sp.playlist(uri, 0, 25) {
@@ -410,14 +427,14 @@ impl Shell {
                         }
                     };
                     let feed = home::parse(&sp.home("")?);
-                    anyhow::Ok((sp, feed, lib))
+                    anyhow::Ok((sp, feed, lib, local_slot))
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok((sp, feed, lib)) => {
-                        this.spotify = Some(sp.clone());
-                        this.start_local(sp, cx);
+                    Ok((sp, feed, lib, local_slot)) => {
+                        this.spotify = Some(sp);
+                        this.start_local(local_slot, cx);
                         // Test hook: open Listening activity without clicking (captures).
                         if std::env::var_os("SPOTIRUST_OPEN_FRIENDS").is_some() {
                             this.toggle_friends(cx);
@@ -525,20 +542,41 @@ impl Shell {
     }
 
     /// Starts the built-in "Spotirust" Connect device and mirrors its events into the player bar.
-    fn start_local(&mut self, sp: Arc<Spotify>, cx: &mut Context<Self>) {
+    fn start_local(&mut self, slot: LocalSlot, cx: &mut Context<Self>) {
         if std::env::var_os("SPOTIRUST_NO_PLAYER").is_some() {
             return;
         }
+        self.local_starting = true;
         cx.spawn(async move |this, cx| {
-            let local = match cx.background_executor().spawn(async move { sp.start_player() }).await {
+            let started = loop {
+                if let Some(r) = slot.lock().unwrap().take() {
+                    break r;
+                }
+                cx.background_executor().timer(Duration::from_millis(20)).await;
+            };
+            let local = match started {
                 Ok(l) => Arc::new(l),
                 Err(e) => {
                     eprintln!("local player: {e:#}");
+                    let _ = this.update(cx, |this, cx| {
+                        this.local_starting = false;
+                        // Run what was pressed meanwhile the other way.
+                        if let Some(cmd) = this.local_pending.take() {
+                            this.player(cmd, cx);
+                        }
+                    });
                     return;
                 }
             };
             eprintln!("local player: registered as {}", local.device_id);
-            if this.update(cx, |this, _| this.local = Some(local.clone())).is_err() {
+            let ready = this.update(cx, |this, cx| {
+                this.local = Some(local.clone());
+                this.local_starting = false;
+                if let Some(cmd) = this.local_pending.take() {
+                    this.player(cmd, cx);
+                }
+            });
+            if ready.is_err() {
                 return;
             }
             loop {
@@ -646,8 +684,10 @@ impl Shell {
     /// player; starting playback (play, or playing a page) pulls playback here from whichever
     /// device has it. Pause/skip/seek/volume on another device go through the Web API.
     fn player(&mut self, cmd: Play, cx: &mut Context<Self>) {
-        if self.local.is_none() {
-            eprintln!("player: built-in player not ready, using Web API");
+        // Pressed while the built-in player is still starting: run it once it's ready.
+        if self.local.is_none() && self.local_starting {
+            self.local_pending = Some(cmd);
+            return;
         }
         if let Some(local) = self.local.clone() {
             let active = self.local_active();
@@ -808,6 +848,23 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// Volume follows the bar while it's dragged: straight to the built-in player's output, or
+    /// (for another device) through the Web API at most every 250 ms.
+    fn live_volume(&mut self, f: f32, cx: &mut Context<Self>) {
+        let v = (f * 100.).round() as u32;
+        if let Some(d) = self.playback.as_mut().and_then(|p| p.device.as_mut()) {
+            d.volume_percent = Some(v);
+        }
+        if self.local_active() {
+            if let Some(local) = &self.local {
+                let _ = local.set_volume(v);
+            }
+        } else if self.volume_sent.elapsed() > Duration::from_millis(250) {
+            self.volume_sent = Instant::now();
+            self.player(Play::Volume(v), cx);
+        }
     }
 
     fn playing_track_id(&self) -> Option<String> {
@@ -2677,6 +2734,7 @@ impl Shell {
                             move |f, _, cx| {
                                 let _ = this.update(cx, |this, cx| {
                                     this.slider_drag = Some((Slider::Volume, f));
+                                    this.live_volume(f, cx);
                                     cx.notify();
                                 });
                             }
@@ -2827,6 +2885,9 @@ impl Render for Shell {
                     if w > 0. {
                         let f = (f32::from(ev.position.x - b.origin.x) / w).clamp(0., 1.);
                         this.slider_drag = Some((kind, f));
+                        if kind == Slider::Volume {
+                            this.live_volume(f, cx);
+                        }
                         cx.notify();
                     }
                     return;

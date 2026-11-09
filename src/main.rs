@@ -11,6 +11,7 @@ mod http;
 mod images;
 mod library;
 mod playlist;
+mod audio_out;
 mod player;
 mod artist;
 mod login;

@@ -31,6 +31,7 @@ zenpixels = "0.2"
 zip = { version = "9.4.1", default-features = false, features = ["deflate"] }
 librespot-playback = "0.8"
 librespot-connect = "0.8"
+rodio = { version = "0.21", default-features = false, features = ["playback"] }
 
 # Keep target/ small: no debug info for dependencies, line tables only for our crate.
 [profile.dev]
