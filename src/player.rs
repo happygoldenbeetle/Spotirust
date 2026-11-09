@@ -30,6 +30,11 @@ pub struct LocalState {
     pub at: Option<Instant>,
     /// A track is loaded here (set on load/play/pause, cleared on stop: another device took over).
     pub loaded: bool,
+    /// 0..=100, once the mixer reports it.
+    pub volume: Option<u32>,
+    pub shuffle: Option<bool>,
+    /// `off` | `context` | `track`
+    pub repeat: Option<&'static str>,
     /// Bumped on every event, so the UI can tell something changed.
     pub seq: u64,
 }
@@ -104,6 +109,13 @@ impl LocalPlayer {
                             s.playing = false;
                             s.loaded = false;
                         }
+                        PlayerEvent::VolumeChanged { volume } => {
+                            s.volume = Some(((volume as f32 / u16::MAX as f32) * 100.).round() as u32)
+                        }
+                        PlayerEvent::ShuffleChanged { shuffle } => s.shuffle = Some(shuffle),
+                        PlayerEvent::RepeatChanged { context, track } => {
+                            s.repeat = Some(if track { "track" } else if context { "context" } else { "off" })
+                        }
                         _ => {}
                     }
                     s.seq += 1;
@@ -158,10 +170,15 @@ impl LocalPlayer {
     /// Makes this the active device and plays `context` (from `track`, if given). Load requests
     /// are ignored by an inactive device, so activate first (commands are handled in order).
     pub fn play_context(&self, context: &str, track: Option<&str>) -> Result<()> {
+        self.load(context, track, 0, true)
+    }
+
+    /// Activates and loads `context` at `track` / `seek_ms`, playing or paused.
+    pub fn load(&self, context: &str, track: Option<&str>, seek_ms: u64, start_playing: bool) -> Result<()> {
         self.spirc.activate()?;
         let options = LoadRequestOptions {
-            start_playing: true,
-            seek_to: 0,
+            start_playing,
+            seek_to: seek_ms.min(u32::MAX as u64) as u32,
             context_options: None,
             playing_track: track.map(|t| PlayingTrack::Uri(t.to_string())),
         };

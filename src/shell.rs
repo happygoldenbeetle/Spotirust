@@ -516,9 +516,7 @@ impl Shell {
                     this.toast = Some((text, Instant::now()));
                 }
                 if let Ok(pb) = pb {
-                    this.playback = pb;
-                    this.refresh_now_playing(cx);
-                    this.playback_at = Instant::now();
+                    this.set_playback(pb, cx);
                 }
                 cx.notify();
             });
@@ -544,7 +542,7 @@ impl Shell {
                 return;
             }
             loop {
-                cx.background_executor().timer(Duration::from_millis(100)).await;
+                cx.background_executor().timer(Duration::from_millis(30)).await;
                 let st = local.state();
                 let alive = this.update(cx, |this, cx| {
                     if st.seq == this.local_seq {
@@ -555,15 +553,9 @@ impl Shell {
                         return;
                     }
                     let track_changed = this.playing_track_id().map(|id| format!("spotify:track:{id}")) != Some(st.track_uri.clone());
-                    if let Some(pb) = this.playback.as_mut() {
-                        let drift = st.at.map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-                        pb.is_playing = st.playing;
-                        pb.progress_ms = Some(st.position_ms as u64 + if st.playing { drift } else { 0 });
-                        this.playback_at = Instant::now();
-                    }
+                    this.apply_local(&st);
                     if track_changed && !st.track_uri.is_empty() {
-                        // New track: title, art and duration come from the Web API.
-                        this.command(|_| Ok(()), cx);
+                        this.load_local_track(st.track_uri.clone(), cx);
                     }
                     cx.notify();
                 });
@@ -575,40 +567,119 @@ impl Shell {
         .detach();
     }
 
-    /// Whether the built-in device is the one playing.
+    /// Takes a Web API playback snapshot; while the built-in player is playing, its own state
+    /// (play/pause, position, volume, shuffle, repeat) wins, since the server lags behind it.
+    fn set_playback(&mut self, mut pb: Option<crate::api::Playback>, cx: &mut Context<Self>) {
+        // Keep the local player's track if the server still reports the previous one.
+        if let (Some(st), Some(new)) = (self.local.as_ref().map(|l| l.state()).filter(|s| s.loaded), pb.as_mut()) {
+            let ours = |t: &Option<crate::api::Track>| t.as_ref().and_then(|t| t.id.as_deref()).map(|id| format!("spotify:track:{id}"));
+            if ours(&new.item).as_deref() != Some(st.track_uri.as_str()) {
+                if let Some(cur) = self.playback.as_ref().filter(|p| ours(&p.item).as_deref() == Some(st.track_uri.as_str())) {
+                    new.item = cur.item.clone();
+                }
+            }
+        }
+        self.playback = pb;
+        self.playback_at = Instant::now();
+        if let Some(st) = self.local.as_ref().map(|l| l.state()).filter(|s| s.loaded) {
+            self.apply_local(&st);
+        }
+        self.refresh_now_playing(cx);
+    }
+
+    fn apply_local(&mut self, st: &crate::player::LocalState) {
+        let Some(pb) = self.playback.as_mut() else { return };
+        let drift = st.at.map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+        pb.is_playing = st.playing;
+        pb.progress_ms = Some(st.position_ms as u64 + if st.playing { drift } else { 0 });
+        if let Some(on) = st.shuffle {
+            pb.shuffle_state = on;
+        }
+        if let Some(r) = st.repeat {
+            pb.repeat_state = r.to_string();
+        }
+        if let (Some(v), Some(d)) = (st.volume, pb.device.as_mut()) {
+            d.volume_percent = Some(v);
+        }
+        self.playback_at = Instant::now();
+    }
+
+    /// The built-in player moved to a new track: fetch its title/art/duration straight away
+    /// (the Web API's playback state takes a while to catch up), then the context in the background.
+    fn load_local_track(&mut self, uri: String, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let Some(id) = uri.strip_prefix("spotify:track:").map(str::to_string) else { return };
+        cx.spawn(async move |this, cx| {
+            let a = api.clone();
+            let track = cx.background_executor().spawn(async move { a.track(&id) }).await;
+            let _ = this.update(cx, |this, cx| {
+                match track {
+                    Ok(t) => {
+                        if let Some(pb) = this.playback.as_mut() {
+                            pb.item = Some(t);
+                        }
+                        this.refresh_now_playing(cx);
+                    }
+                    Err(e) => eprintln!("track {uri}: {e:#}"),
+                }
+                cx.notify();
+            });
+            // Device / context from the server once it has caught up.
+            cx.background_executor().timer(Duration::from_millis(1500)).await;
+            let pb = cx.background_executor().spawn(async move { api.playback_or_last() }).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(pb) = pb {
+                    this.set_playback(pb, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Whether the built-in player has something loaded (it's the device actually playing).
     fn local_active(&self) -> bool {
-        let Some(local) = &self.local else { return false };
-        let dev = self.playback.as_ref().and_then(|p| p.device.as_ref()).and_then(|d| d.id.as_deref());
-        dev == Some(local.device_id.as_str()) || local.state().loaded
+        self.local.as_ref().is_some_and(|l| l.state().loaded)
     }
 
     /// Runs a player command. While Spotirust is the active device it goes straight to the local
     /// player; starting playback (play, or playing a page) pulls playback here from whichever
     /// device has it. Pause/skip/seek/volume on another device go through the Web API.
     fn player(&mut self, cmd: Play, cx: &mut Context<Self>) {
+        if self.local.is_none() {
+            eprintln!("player: built-in player not ready, using Web API");
+        }
         if let Some(local) = self.local.clone() {
             let active = self.local_active();
+            let dev = self.playback.as_ref().and_then(|p| p.device.as_ref()).and_then(|d| d.id.clone());
+            let other_device = dev.as_deref().is_some_and(|d| d != local.device_id);
+            // Spotify can still list Spotirust as the player after a restart, while this new
+            // instance has nothing loaded and ignores commands: resume here from the last state.
+            let stale = !active && dev.as_deref() == Some(local.device_id.as_str());
             let starts = matches!(cmd, Play::Resume | Play::Context(_) | Play::ContextAt(..));
-            if active || starts {
+            if active || starts || stale {
                 let res = match &cmd {
-                    Play::Resume if active => local.play(),
-                    Play::Resume => local.take_over(true),
-                    Play::Pause => local.pause(),
-                    Play::Next => local.next(),
-                    Play::Prev => local.prev(),
-                    Play::Seek(ms) => local.seek(*ms),
-                    Play::Volume(v) => local.set_volume(*v),
-                    Play::Shuffle(on) => local.shuffle(*on),
-                    Play::Repeat(r) => local.repeat(r),
                     Play::Context(c) => local.play_context(c, None),
                     Play::ContextAt(c, t) => local.play_context(c, Some(t)),
+                    _ if active => match &cmd {
+                        Play::Resume => local.play(),
+                        Play::Pause => local.pause(),
+                        Play::Next => local.next(),
+                        Play::Prev => local.prev(),
+                        Play::Seek(ms) => local.seek(*ms),
+                        Play::Volume(v) => local.set_volume(*v),
+                        Play::Shuffle(on) => local.shuffle(*on),
+                        Play::Repeat(r) => local.repeat(r),
+                        _ => Ok(()),
+                    },
+                    // Another device is playing: hand its session over (it stops there).
+                    Play::Resume if other_device => local.take_over(true),
+                    // Nothing loaded here: load what was last playing, then apply the command.
+                    _ => self.restore_local(&local, &cmd),
                 };
                 match res {
-                    Ok(()) => {
-                        // Events update the bar at once; this picks up metadata.
-                        self.command(|_| Ok(()), cx);
-                        return;
-                    }
+                    // The player's own events update the bar (and fetch metadata on a new track).
+                    Ok(()) => return,
                     Err(e) => eprintln!("local player: {e:#}"),
                 }
             }
@@ -628,6 +699,33 @@ impl Shell {
             },
             cx,
         );
+    }
+
+    /// Loads the last known track (context, position) into the built-in player, then applies
+    /// `cmd` on top. Falls back to a Connect transfer when there's nothing to resume from.
+    fn restore_local(&self, local: &crate::player::LocalPlayer, cmd: &Play) -> anyhow::Result<()> {
+        let pb = self.playback.as_ref();
+        let Some(id) = pb.and_then(|p| p.item.as_ref()).and_then(|t| t.id.clone()) else {
+            return local.take_over(matches!(cmd, Play::Resume));
+        };
+        let track = format!("spotify:track:{id}");
+        let context = pb.and_then(|p| p.context.as_ref()).map(|c| c.uri.clone()).unwrap_or_else(|| track.clone());
+        let was_playing = pb.is_some_and(|p| p.is_playing);
+        let (seek, play) = match cmd {
+            Play::Resume => (self.progress_ms(), true),
+            Play::Pause => (self.progress_ms(), false),
+            Play::Seek(ms) => (*ms, was_playing),
+            _ => (self.progress_ms(), was_playing),
+        };
+        local.load(&context, Some(&track), seek, play)?;
+        match cmd {
+            Play::Next => local.next(),
+            Play::Prev => local.prev(),
+            Play::Volume(v) => local.set_volume(*v),
+            Play::Shuffle(on) => local.shuffle(*on),
+            Play::Repeat(r) => local.repeat(r),
+            _ => Ok(()),
+        }
     }
 
     fn toggle_play(&mut self, cx: &mut Context<Self>) {
@@ -1012,11 +1110,7 @@ impl Shell {
                     let pb = cx.background_executor().spawn(async move { api.playback_or_last() }).await;
                     let ok = this.update(cx, |this, cx| {
                         match pb {
-                            Ok(pb) => {
-                                this.playback = pb;
-                                this.refresh_now_playing(cx);
-                                this.playback_at = Instant::now();
-                            }
+                            Ok(pb) => this.set_playback(pb, cx),
                             Err(e) => eprintln!("playback: {e:#}"),
                         }
                         cx.notify();

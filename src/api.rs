@@ -265,6 +265,11 @@ impl Api {
     /// (track, position, "Playing on" device), paused. The Web API forgets an idle device after a
     /// while (204), so the last real response is kept on disk; recently-played is the fallback
     /// when there is none (it has no position, so that starts at 0:00).
+    /// One track's metadata (for the built-in player's track changes).
+    pub fn track(&self, id: &str) -> Result<Track> {
+        self.get(&format!("/tracks/{id}"))
+    }
+
     pub fn playback_or_last(&self) -> Result<Option<Playback>> {
         if let Some(pb) = self.playback()? {
             return Ok(Some(pb));
