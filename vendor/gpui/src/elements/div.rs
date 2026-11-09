@@ -2495,7 +2495,7 @@ impl Interactivity {
     fn compute_style_internal(
         &self,
         hitbox: Option<&Hitbox>,
-        element_state: Option<&mut InteractiveElementState>,
+        mut element_state: Option<&mut InteractiveElementState>,
         window: &mut Window,
         cx: &mut App,
     ) -> Style {
@@ -2516,19 +2516,46 @@ impl Interactivity {
             }
         }
 
+        if hitbox.is_none()
+            && !cx.has_active_drag()
+            && let Some(state) = element_state.as_ref()
+        {
+            // Layout pass: no hitbox yet. Apply just the text part of the hover styles from the
+            // last painted frame (hover changes trigger a refresh, so this catches up in a frame).
+            let text_only = |s: &StyleRefinement| {
+                let mut r = StyleRefinement::default();
+                r.text = s.text.clone();
+                r
+            };
+            if state.last_hover.0
+                && let Some(group_hover) = self.group_hover_style.as_ref()
+            {
+                style.refine(&text_only(&group_hover.style));
+            }
+            if state.last_hover.1
+                && let Some(hover_style) = self.hover_style.as_ref()
+            {
+                style.refine(&text_only(hover_style));
+            }
+        }
+
         if let Some(hitbox) = hitbox {
             if !cx.has_active_drag() {
-                if let Some(group_hover) = self.group_hover_style.as_ref()
-                    && let Some(group_hitbox_id) = GroupHitboxes::get(&group_hover.group, cx)
-                    && group_hitbox_id.is_hovered(window)
-                {
+                let group_hovered = self.group_hover_style.as_ref().is_some_and(|group_hover| {
+                    GroupHitboxes::get(&group_hover.group, cx).is_some_and(|id| id.is_hovered(window))
+                });
+                if group_hovered && let Some(group_hover) = self.group_hover_style.as_ref() {
                     style.refine(&group_hover.style);
                 }
 
+                let hovered = self.hover_style.is_some() && hitbox.is_hovered(window);
                 if let Some(hover_style) = self.hover_style.as_ref()
-                    && hitbox.is_hovered(window)
+                    && hovered
                 {
                     style.refine(hover_style);
+                }
+                if let Some(state) = element_state.as_deref_mut() {
+                    state.last_hover = (group_hovered, hovered);
                 }
             }
 
@@ -2594,6 +2621,9 @@ pub struct InteractiveElementState {
     pub(crate) pending_mouse_down: Option<Rc<RefCell<Option<MouseDownEvent>>>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
+    /// (group hovered, element hovered) as of the last paint. Layout runs before hit-testing, so
+    /// hover text styles (colour, underline) are applied from this, or text would never change.
+    pub(crate) last_hover: (bool, bool),
 }
 
 /// Whether or not the element or a group that contains it is clicked by the mouse.

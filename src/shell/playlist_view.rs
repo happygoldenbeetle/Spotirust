@@ -786,7 +786,27 @@ impl Shell {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(one_line(t.name.clone()).text_size(px(16.)).line_height(px(22.4)).text_color(c(title_color)))
+                            .child({
+                                // The client links the title to the song page (underline on hover);
+                                // until there's a song page it opens the song's album.
+                                let album = t.album_uri.clone();
+                                div().flex().child(
+                                    one_line(t.name.clone())
+                                        .id(gpui::ElementId::Name(format!("trk-title-{i}").into()))
+                                        .min_w_0()
+                                        .text_size(px(16.))
+                                        .line_height(px(22.4))
+                                        .text_color(c(title_color))
+                                        .cursor_pointer()
+                                        .hover(|s| s.underline())
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(p) = Page::for_uri(&album) {
+                                                cx.stop_propagation();
+                                                this.open(p, cx);
+                                            }
+                                        })),
+                                )
+                            })
                             .child(
                                 div()
                                     .flex()
