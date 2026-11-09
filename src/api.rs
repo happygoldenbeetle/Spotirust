@@ -231,6 +231,23 @@ impl Api {
     }
 
     /// All of the user's playlists (follows `next` links).
+    /// Song count of each of your playlists (`spotify:playlist:<id>` -> total).
+    pub fn my_playlist_counts(&self) -> Result<std::collections::HashMap<String, u32>> {
+        let mut out = std::collections::HashMap::new();
+        let mut next = Some("/me/playlists?limit=50".to_string());
+        while let Some(url) = next {
+            let page: serde_json::Value = self.get(&url)?;
+            for p in page.get("items").and_then(|i| i.as_array()).into_iter().flatten() {
+                let total = p.pointer("/items/total").or_else(|| p.pointer("/tracks/total")).and_then(|t| t.as_u64());
+                if let (Some(id), Some(total)) = (p.get("id").and_then(|i| i.as_str()), total) {
+                    out.insert(format!("spotify:playlist:{id}"), total as u32);
+                }
+            }
+            next = page.get("next").and_then(|n| n.as_str()).map(str::to_string);
+        }
+        Ok(out)
+    }
+
     pub fn my_playlists(&self) -> Result<Vec<Playlist>> {
         let mut out = Vec::new();
         let mut next = Some("/me/playlists?limit=50".to_string());

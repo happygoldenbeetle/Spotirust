@@ -510,6 +510,34 @@ impl Shell {
         list.into_any_element()
     }
 
+    /// Creates a playlist called `name` holding `uri` (a track, or a whole album / playlist) and opens it.
+    pub(super) fn new_playlist_with(&mut self, uri: String, name: String, cx: &mut Context<Self>) {
+        let (Some(api), Some(me)) = (self.api.clone(), self.me.clone()) else { return };
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move {
+                    let pl = api.create_playlist(&me.id, &name)?;
+                    let uris = if uri.contains(":track:") { vec![uri] } else { api.context_tracks(&uri)? };
+                    api.add_to_playlist(&pl, &uris)?;
+                    anyhow::Ok(pl)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match res {
+                Ok(pl) => {
+                    this.reload_library(cx);
+                    this.open(Page::Playlist(pl), cx);
+                }
+                Err(e) => {
+                    eprintln!("new playlist: {e:#}");
+                    this.toast = Some(("Something went wrong. Try again.".into(), Instant::now()));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn run_ctx_action(&mut self, act: Act, cx: &mut Context<Self>) {
         let target_name = self.ctx_menu.as_ref().map(|m| match &m.target {
             Target::Track { name, .. } | Target::Playlist { name, .. } | Target::Album { name, .. } | Target::Artist { name, .. } => name.clone(),
@@ -599,31 +627,8 @@ impl Shell {
                 );
             }
             Act::NewPlaylistWith(uri) => {
-                let (Some(api), Some(me)) = (api, self.me.clone()) else { return };
                 let name = target_name.unwrap_or_else(|| "New playlist".into());
-                cx.spawn(async move |this, cx| {
-                    let res = cx
-                        .background_executor()
-                        .spawn(async move {
-                            let pl = api.create_playlist(&me.id, &name)?;
-                            let uris = if uri.contains(":track:") { vec![uri] } else { api.context_tracks(&uri)? };
-                            api.add_to_playlist(&pl, &uris)?;
-                            anyhow::Ok(pl)
-                        })
-                        .await;
-                    let _ = this.update(cx, |this, cx| match res {
-                        Ok(pl) => {
-                            this.reload_library(cx);
-                            this.open(Page::Playlist(pl), cx);
-                        }
-                        Err(e) => {
-                            eprintln!("new playlist: {e:#}");
-                            this.toast = Some(("Something went wrong. Try again.".into(), Instant::now()));
-                            cx.notify();
-                        }
-                    });
-                })
-                .detach();
+                self.new_playlist_with(uri, name, cx);
             }
             Act::Radio(seed) => {
                 let Some(sp) = self.spotify.clone() else { return };
@@ -674,7 +679,7 @@ impl Shell {
         self.background_then(cx, ok.to_string(), f, |_, _| {});
     }
 
-    fn background_then(
+    pub(super) fn background_then(
         &mut self,
         cx: &mut Context<Self>,
         ok: String,

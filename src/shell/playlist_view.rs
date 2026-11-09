@@ -872,16 +872,34 @@ impl Shell {
                 .flex_row()
                 .items_center()
                 .justify_end()
-                .child(if self.liked.contains(&t.uri) {
-                    // measured: liked tracks show the green check at all times
-                    div().w(px(16.)).flex_none().child(icon("icons/check_circle.svg", 16., GREEN))
-                } else {
-                    div()
+                .child({
+                    let uri = t.uri.clone();
+                    let liked = self.liked.contains(&t.uri);
+                    let btn = div()
+                        .id(gpui::ElementId::Name(format!("{group}-add").into()))
                         .w(px(16.))
+                        .h(px(32.))
                         .flex_none()
-                        .opacity(0.)
-                        .group_hover(group.clone(), |s| s.opacity(1.))
-                        .child(icon("icons/add_circle.svg", 16., TEXT_SUBDUED))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            if liked {
+                                let (x, y, b) = Self::anchor_of(ev, 16.);
+                                this.open_add_popover(uri.clone(), (x, y - 8., b + 8.), cx);
+                            } else {
+                                this.like_track(uri.clone(), cx);
+                            }
+                        }));
+                    if liked {
+                        // measured: liked tracks show the green check at all times
+                        btn.child(icon("icons/check_circle.svg", 16., GREEN))
+                    } else {
+                        btn.opacity(0.)
+                            .group_hover(group.clone(), |s| s.opacity(1.))
+                            .child(svg().path("icons/add_circle.svg").size(px(16.)).text_color(c(TEXT_SUBDUED)).hover(|s| s.text_color(c(WHITE))))
+                    }
                 })
                 .child(
                     div()

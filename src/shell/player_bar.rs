@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 
-use gpui::{ScrollDelta, ScrollWheelEvent};
+use gpui::{ClickEvent, ScrollDelta, ScrollWheelEvent};
 
 use super::*;
 
@@ -265,7 +265,15 @@ impl Shell {
                 let tip = if saved { "Add to playlist" } else { "Add to Liked Songs" };
                 self.bar_wire(round_button(id, 32.).ml(px(8.)), id, tip.into(), cx)
                     .opacity(if pressed { 0.7 } else { 1. })
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_saved(cx)))
+                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                        let Some(id) = this.playing_track_id() else { return };
+                        let uri = format!("spotify:track:{id}");
+                        if this.is_saved() {
+                            this.open_add_popover(uri, Self::anchor_of(ev, 32.), cx);
+                        } else {
+                            this.like_track(uri, cx);
+                        }
+                    }))
                     .child(svg().path(path).size(px(16. * scale)).text_color(mix(rest, hover, t_)))
             })
         });
@@ -526,7 +534,7 @@ impl Shell {
     }
 
     /// Mute keeps the level and restores it (the client's mute helper).
-    fn toggle_mute(&mut self, volume: u32, cx: &mut Context<Self>) {
+    pub(super) fn toggle_mute(&mut self, volume: u32, cx: &mut Context<Self>) {
         if volume == 0 {
             let v = self.muted_volume.take().filter(|v| *v > 0).unwrap_or(50);
             self.player(Play::Volume(v), cx);

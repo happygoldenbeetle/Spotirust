@@ -30,6 +30,7 @@ mod player_bar;
 mod side_panels;
 mod lyrics_view;
 mod miniplayer;
+mod add_popover;
 
 use std::collections::{HashMap, HashSet};
 
@@ -158,6 +159,14 @@ pub struct Shell {
     /// Full screen (cinema) view on.
     cinema: bool,
     mini_debug_done: bool,
+    /// Open "Add to playlist" popover.
+    add_pop: Option<add_popover::AddPop>,
+    /// Your playlists' track URIs and song counts (for the popover's "Saved in").
+    pl_contents: HashMap<String, HashSet<String>>,
+    pl_counts: HashMap<String, u32>,
+    /// Miniplayer card colour: (cover url, its extracted dark colour), and the cover being fetched.
+    mini_color: Option<(String, u32)>,
+    mini_color_loading: Option<String>,
 }
 
 /// What the right panel shows.
@@ -399,6 +408,11 @@ impl Shell {
             miniplayer: None,
             cinema: false,
             mini_debug_done: false,
+            add_pop: None,
+            pl_contents: HashMap::new(),
+            pl_counts: HashMap::new(),
+            mini_color: None,
+            mini_color_loading: None,
         };
         // Debug: SPOTIRUST_LEFT=rail | <width> starts with that library width.
         match std::env::var("SPOTIRUST_LEFT").ok().as_deref() {
@@ -960,6 +974,10 @@ impl Shell {
     /// The desktop client's playback shortcuts: Space play/pause, Ctrl+Right/Left next/previous,
     /// Ctrl+Up/Down volume ±10, Ctrl+S shuffle, Ctrl+R repeat.
     fn shortcut_key(&mut self, ev: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        if self.add_popover_key(ev, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let k = &ev.keystroke;
         let ctrl = k.modifiers.control;
         let pb = self.playback.clone();
@@ -2791,6 +2809,7 @@ impl Render for Shell {
             self.mini_debug_done = true;
             self.open_miniplayer(window, cx);
         }
+        self.refresh_mini_color(cx);
         if self.fx_animating() {
             window.request_animation_frame();
         }
@@ -2933,6 +2952,7 @@ impl Render for Shell {
                         ),
                 )
             })
+            .children(self.add_popover_view(window, cx))
             .children(self.cinema_view(window, cx))
             .children(self.bar_tooltip(vw))
     }

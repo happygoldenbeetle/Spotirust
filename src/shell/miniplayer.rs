@@ -15,6 +15,10 @@ use super::*;
 pub struct MiniPlayer {
     shell: WeakEntity<Shell>,
     hovered: bool,
+    /// Volume pop-up over the mute button: shown while hovered or dragged; its track's bounds.
+    vol_hover: bool,
+    vol_drag: bool,
+    vol_track: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     _observe: Option<gpui::Subscription>,
 }
 
@@ -64,7 +68,7 @@ impl Shell {
                 move |_, cx| {
                     cx.new(|cx| {
                         let observe = cx.observe(&observed, |_, _, cx| cx.notify());
-                        MiniPlayer { shell: observed.downgrade(), hovered: false, _observe: Some(observe) }
+                        MiniPlayer { shell: observed.downgrade(), hovered: false, vol_hover: false, vol_drag: false, vol_track: Default::default(), _observe: Some(observe) }
                     })
                 },
             );
@@ -188,7 +192,54 @@ fn keep_on_top(_: &mut gpui::App) {
 #[cfg(not(windows))]
 fn keep_on_top(_: &mut gpui::App) {}
 
+impl Shell {
+    /// The playing track's 640px cover.
+    pub(super) fn cover_url(&self) -> Option<String> {
+        let t = self.playback.as_ref()?.item.as_ref()?;
+        api::pick_image(&t.album.as_ref()?.images, 640).map(|i| i.url.clone())
+    }
+
+    /// Keeps `mini_color` on the playing cover while the miniplayer is open.
+    pub(super) fn refresh_mini_color(&mut self, cx: &mut Context<Self>) {
+        if self.miniplayer.is_none() {
+            return;
+        }
+        let (Some(url), Some(sp)) = (self.cover_url(), self.spotify.clone()) else { return };
+        if self.mini_color.as_ref().is_some_and(|(u, _)| *u == url) || self.mini_color_loading.as_deref() == Some(url.as_str()) {
+            return;
+        }
+        self.mini_color_loading = Some(url.clone());
+        cx.spawn(async move |this, cx| {
+            let u = url.clone();
+            let color = cx
+                .background_executor()
+                .spawn(async move { sp.extracted_colors(&[u]).ok().and_then(|v| crate::user::extracted_color(&v)) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.mini_color_loading = None;
+                if let Some(col) = color {
+                    this.mini_color = Some((url, col));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+}
+
 impl MiniPlayer {
+    /// Volume from a pointer height over the pop-up's track (top = 100%).
+    fn set_vol_at(&mut self, y: f32, cx: &mut Context<Self>) {
+        let b = self.vol_track.get();
+        let h = f32::from(b.size.height);
+        if h <= 0. {
+            return;
+        }
+        let f = (1. - (y - f32::from(b.origin.y)) / h).clamp(0., 1.);
+        self.with_shell(cx, |s, cx| s.live_volume(f, cx));
+        cx.notify();
+    }
+
     fn with_shell<R>(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut Shell, &mut Context<Shell>) -> R) -> Option<R> {
         self.shell.upgrade().map(|s| s.update(cx, f))
     }
@@ -209,7 +260,8 @@ impl Render for MiniPlayer {
         let saved = s.is_saved();
         let progress = s.progress_ms();
         let duration = track.as_ref().map(|t| t.duration_ms).unwrap_or(0);
-        let card_bg = s.lyrics.as_ref().and_then(|l| l.1.as_ref()).map(|l| l.background).unwrap_or(0x535353);
+        // The cover's extracted dark colour (the reference shows #8f3300 for Pasoori's cover).
+        let card_bg = s.mini_color.as_ref().filter(|(u, _)| Some(u) == s.cover_url().as_ref()).map(|c| c.1).unwrap_or(0x535353);
         let art = track
             .as_ref()
             .and_then(|t| t.album.as_ref())
@@ -254,9 +306,59 @@ impl Render for MiniPlayer {
                     .flex_row()
                     .items_center()
                     .justify_center()
-                    .child(ctl("mini-mute", vol_icon, false).on_click(cx.listener(move |this, _, _, cx| {
-                        this.with_shell(cx, |s, cx| s.player(Play::Volume(if volume == 0 { 50 } else { 0 }), cx));
-                    })))
+                    .child({
+                        // Mute, with the vertical volume slider that pops up above it on hover
+                        // (20x80 #333 radius 4, a 4x64 track 8px in: rgba(255,255,255,.3) / white).
+                        let track = self.vol_track.clone();
+                        let shown = self.vol_hover || self.vol_drag;
+                        let frac = volume as f32 / 100.;
+                        div()
+                            .id("mini-vol")
+                            .relative()
+                            .on_hover(cx.listener(|this, h: &bool, _, cx| {
+                                this.vol_hover = *h;
+                                cx.notify();
+                            }))
+                            .child(ctl("mini-mute", vol_icon, false).on_click(cx.listener(move |this, _, _, cx| {
+                                this.with_shell(cx, |s, cx| s.toggle_mute(volume, cx));
+                            })))
+                            .when(shown, |d| {
+                                d.child(
+                                    div()
+                                        .id("mini-vol-pop")
+                                        .absolute()
+                                        .left(px(6.))
+                                        .top(px(-86.))
+                                        .w(px(20.))
+                                        .h(px(88.))
+                                        .child(
+                                            div()
+                                                .w(px(20.))
+                                                .h(px(80.))
+                                                .rounded(px(4.))
+                                                .bg(c(0x333333))
+                                                .pt(px(8.))
+                                                .flex()
+                                                .justify_center()
+                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                                                    this.vol_drag = true;
+                                                    this.set_vol_at(f32::from(ev.position.y), cx);
+                                                    cx.stop_propagation();
+                                                }))
+                                                .child(
+                                                    div()
+                                                        .relative()
+                                                        .w(px(4.))
+                                                        .h(px(64.))
+                                                        .rounded(px(2.))
+                                                        .bg(rgba(0xFFFFFF4D))
+                                                        .child(canvas(move |b, _, _| track.set(b), |_, _, _, _| {}).absolute().inset_0())
+                                                        .child(div().absolute().bottom_0().left_0().w(px(4.)).h(px(64. * frac)).rounded(px(2.)).bg(c(WHITE))),
+                                                ),
+                                        ),
+                                )
+                            })
+                    })
                     .child(ctl("mini-shuffle", "icons/shuffle.svg", shuffle).on_click(cx.listener(move |this, _, _, cx| {
                         this.with_shell(cx, |s, cx| s.player(Play::Shuffle(!shuffle), cx));
                     })))
@@ -324,6 +426,25 @@ impl Render for MiniPlayer {
             .size_full()
             .bg(c(0x000000))
             .font(ui_font_with_fallbacks())
+            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
+                if this.vol_drag {
+                    this.set_vol_at(f32::from(ev.position.y), cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if std::mem::take(&mut this.vol_drag) {
+                        // Commit the final level (live updates are throttled for other devices).
+                        this.with_shell(cx, |s, cx| {
+                            if let Some(v) = s.playback.as_ref().and_then(|p| p.device.as_ref()).and_then(|d| d.volume_percent) {
+                                s.player(Play::Volume(v), cx);
+                            }
+                        });
+                        cx.notify();
+                    }
+                }),
+            )
             .flex()
             .flex_col()
             .child(
@@ -335,8 +456,9 @@ impl Render for MiniPlayer {
                     .flex_row()
                     .items_center()
                     .child(div().absolute().inset_0().window_control_area(WindowControlArea::Drag))
-                    .child(div().ml(px(6.)).child(icon("icons/pl_columns16.svg", 12., TEXT_SUBDUED)))
+                    .child(div().ml(px(6.)).child(icon("icons/mini_settings.svg", 12., TEXT_SUBDUED)))
                     .child(div().flex_1())
+                    .child(div().absolute().left(px(vw / 2. - 12.)).top(px(1.)).child(icon("icons/mini_grip.svg", 24., TEXT_SUBDUED)))
                     .child(
                         div()
                             .id("mini-close")
