@@ -26,6 +26,10 @@ use native_tip::native_tip;
 mod library_view;
 mod user_view;
 mod playlist_view;
+mod player_bar;
+mod side_panels;
+mod lyrics_view;
+mod miniplayer;
 
 use std::collections::{HashMap, HashSet};
 
@@ -140,12 +144,31 @@ pub struct Shell {
     /// Artist page: "See more" expanded (10 popular tracks), selected discography filter.
     artist_more: bool,
     disco_filter: usize,
+    /// Player bar hover / press animation state and tooltip anchors.
+    bar_fx: player_bar::BarFx,
+    bar_tips: player_bar::TipAnchors,
+    /// Level to restore when unmuting.
+    muted_volume: Option<u32>,
+    /// Queue panel data and selected tab (0 = Queue, 1 = Recently played).
+    queue: Option<side_panels::QueueData>,
+    queue_tab: u8,
+    devices: Option<Vec<api::Device>>,
+    lyrics_scroll: lyrics_view::LyricsScroll,
+    miniplayer: Option<gpui::WindowHandle<miniplayer::MiniPlayer>>,
+    /// Full screen (cinema) view on.
+    cinema: bool,
+    mini_debug_done: bool,
 }
 
 /// What the right panel shows.
 #[derive(Clone, Copy, PartialEq)]
 pub enum RightPanel {
+    /// Sidebar closed.
+    None,
     NowPlaying,
+    Queue,
+    /// Connect to a device.
+    Devices,
     /// Listening activity (top bar friends button).
     Friends,
 }
@@ -162,6 +185,8 @@ pub enum Page {
     Liked,
     /// Browse ("Browse all" categories; `/search` in the client's router).
     Browse,
+    /// The expanded Now Playing view in lyrics mode (player bar mic button).
+    Lyrics,
 }
 
 impl Page {
@@ -185,6 +210,14 @@ pub struct Lyrics {
     pub lines: Vec<String>,
     pub background: u32,
     pub text: u32,
+    /// Every line with its start time (ms), as the full Lyrics view shows them (incl. "♪").
+    pub timed: Vec<(u64, String)>,
+    /// LINE_SYNCED (else the lines are shown all at once, unsynced).
+    pub synced: bool,
+    /// The lyrics' own colours (`colors`): background, upcoming text, active text.
+    pub view_bg: u32,
+    pub view_text: u32,
+    pub view_active: u32,
 }
 
 impl Lyrics {
@@ -208,7 +241,28 @@ impl Lyrics {
             let ch = |n: &str| c.get(n).and_then(|x| x.as_u64()).map(|x| x as u32);
             Some(ch("red")? << 16 | ch("green")? << 8 | ch("blue")?)
         };
-        Some(Self { lines, background: rgb("backgroundBase").unwrap_or(0x535353), text: rgb("textSubdued").unwrap_or(0xFFFFFF) })
+        let timed: Vec<(u64, String)> = v
+            .pointer("/lyrics/lines")?
+            .as_array()?
+            .iter()
+            .filter_map(|l| {
+                let ms = l.get("startTimeMs").and_then(|t| t.as_str().and_then(|s| s.parse().ok()).or_else(|| t.as_u64())).unwrap_or(0);
+                Some((ms, l.get("words")?.as_str()?.trim().to_string()))
+            })
+            .collect();
+        let synced = v.pointer("/lyrics/syncType").and_then(|s| s.as_str()) == Some("LINE_SYNCED");
+        // `colors` are signed ARGB ints.
+        let argb = |k: &str, d: u32| v.pointer(&format!("/colors/{k}")).and_then(|x| x.as_i64()).map(|x| (x as u32) & 0xFFFFFF).unwrap_or(d);
+        Some(Self {
+            lines,
+            background: rgb("backgroundBase").unwrap_or(0x535353),
+            text: rgb("textSubdued").unwrap_or(0xFFFFFF),
+            timed,
+            synced,
+            view_bg: argb("background", 0x535353),
+            view_text: argb("text", 0x000000),
+            view_active: argb("highlightText", 0xFFFFFF),
+        })
     }
 }
 
@@ -333,6 +387,16 @@ impl Shell {
             liked: HashSet::new(),
             artist_more: false,
             disco_filter: 0,
+            bar_fx: Default::default(),
+            bar_tips: Default::default(),
+            muted_volume: None,
+            queue: None,
+            queue_tab: 0,
+            devices: None,
+            lyrics_scroll: Default::default(),
+            miniplayer: None,
+            cinema: false,
+            mini_debug_done: false,
         };
         // Debug: SPOTIRUST_LEFT=rail | <width> starts with that library width.
         match std::env::var("SPOTIRUST_LEFT").ok().as_deref() {
@@ -1038,7 +1102,7 @@ impl Shell {
             }
             Page::User(uri) => self.load_user(uri, cx),
             Page::Browse => self.load_browse(cx),
-            Page::Home => {}
+            Page::Home | Page::Lyrics => {}
         }
         cx.notify();
     }
@@ -1290,6 +1354,10 @@ impl Shell {
             return;
         }
         let image = track.album.as_ref().and_then(|a| api::pick_image(&a.images, 640)).map(|i| i.url.clone()).unwrap_or_default();
+        // The queue panel follows the playing track.
+        if self.right_panel == RightPanel::Queue {
+            self.load_queue(cx);
+        }
         self.lyrics = Some((id.clone(), None));
         cx.spawn(async move |this, cx| {
             let tid = id.clone();
@@ -2602,265 +2670,7 @@ impl Shell {
     }
 }
 
-// ---------- player bar -----------------------------------------------------------------------
-
-impl Shell {
-    fn player_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let pb = self.playback.clone();
-        let track = pb.as_ref().and_then(|p| p.item.clone());
-        let playing = pb.as_ref().is_some_and(|p| p.is_playing);
-        let shuffle = pb.as_ref().is_some_and(|p| p.shuffle_state);
-        let repeat = pb.as_ref().map(|p| p.repeat_state.clone()).unwrap_or_default();
-        let duration = track.as_ref().map(|t| t.duration_ms).unwrap_or(0);
-        // While a bar is dragged, it (and the elapsed time) follows the pointer.
-        let (progress, frac) = match self.slider_drag {
-            Some((Slider::Seek, f)) => ((f * duration as f32) as u64, f),
-            _ => {
-                let p = self.progress_ms();
-                (p, if duration > 0 { p as f32 / duration as f32 } else { 0. })
-            }
-        };
-        let volume = match self.slider_drag {
-            Some((Slider::Volume, f)) => (f * 100.).round() as u32,
-            _ => pb.as_ref().and_then(|p| p.device.as_ref()).and_then(|d| d.volume_percent).unwrap_or(100),
-        };
-        let remote_device = pb.as_ref().and_then(|p| p.device.as_ref()).map(|d| d.name.clone());
-
-        let art_url = track
-            .as_ref()
-            .and_then(|t| t.album.as_ref())
-            .and_then(|a| api::pick_image(&a.images, 64).map(|i| images::variant(&i.url, images::Variant::Small)));
-
-        // left: now playing widget
-        let left = div()
-            .flex_1()
-            .min_w_0()
-            .h(px(56.))
-            .flex()
-            .flex_row()
-            .items_center()
-            .when_some(track.clone(), |d, t| {
-                d.child(cover(art_url.as_deref(), 56., 4., cx))
-                    .child(
-                        div()
-                            .ml(px(16.))
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(one_line(t.name.clone()).text_size(px(14.)).line_height(px(22.)).text_color(c(WHITE)))
-                            .child(
-                                one_line(t.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "))
-                                    .text_size(px(12.))
-                                    .line_height(px(16.8))
-                                    .text_color(c(TEXT_SUBDUED)),
-                            ),
-                    )
-                    .child(
-                round_button("add-liked", 32.)
-                    .ml(px(8.))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_saved(cx)))
-                    .child(if self.is_saved() {
-                        icon("icons/check_circle.svg", 16., GREEN)
-                    } else {
-                        icon("icons/add_circle.svg", 16., TEXT_SUBDUED)
-                    }),
-            )
-            });
-
-        // Inactive icons brighten to white on hover; active (green) ones get a dot underneath.
-        let ctl = |id: &'static str, path: &'static str, active: bool| {
-            round_button(id, 32.)
-                .group(id)
-                .relative()
-                .child(
-                    svg()
-                        .path(path)
-                        .size(px(16.))
-                        .text_color(c(if active { GREEN } else { TEXT_SUBDUED }))
-                        .when(!active, |s| s.group_hover(id, |s| s.text_color(c(WHITE)))),
-                )
-                .when(active, |d| {
-                    d.child(div().absolute().bottom(px(0.)).size(px(4.)).rounded_full().bg(c(GREEN)))
-                })
-        };
-        let next_repeat = match repeat.as_str() {
-            "off" | "" => "context",
-            "context" => "track",
-            _ => "off",
-        };
-        let center = div()
-            .w(relative(0.4))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .items_center()
-            .child(
-                div()
-                    .h(px(32.))
-                    .flex()
-                    .flex_row()
-                    .gap(px(16.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .child(
-                                ctl("shuffle", "icons/shuffle.svg", shuffle)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.player(Play::Shuffle(!shuffle), cx)
-                                    })),
-                            )
-                            .child(
-                                ctl("prev", "icons/prev.svg", false)
-                                    .on_click(cx.listener(|this, _, _, cx| this.player(Play::Prev, cx))),
-                            ),
-                    )
-                    .child(
-                        round_button("playpause", 32.)
-                            .bg(c(WHITE))
-                            .hover(|s| s.bg(c(0xF0F0F0)))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_play(cx)))
-                            .child(icon(if playing { "icons/pause.svg" } else { "icons/play.svg" }, 16., 0x000000)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .child(
-                                ctl("next", "icons/next.svg", false)
-                                    .on_click(cx.listener(|this, _, _, cx| this.player(Play::Next, cx))),
-                            )
-                            .child(
-                                ctl("repeat", "icons/repeat.svg", repeat != "off" && !repeat.is_empty())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.player(Play::Repeat(next_repeat.to_string()), cx)
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .mt(px(8.))
-                    .w_full()
-                    .h(px(16.8))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .text_size(px(12.))
-                    .text_color(c(TEXT_SUBDUED))
-                    .child(div().w(px(50.)).flex().justify_end().child(fmt_time(progress)))
-                    .child(
-                        slider("seek", frac, self.slider_drag.is_some_and(|d| d.0 == Slider::Seek), self.seek_bounds.clone(), {
-                            let this = cx.entity().downgrade();
-                            move |f, _, cx| {
-                                let _ = this.update(cx, |this, cx| {
-                                    this.slider_drag = Some((Slider::Seek, f));
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .flex_1()
-                        .mx(px(8.)),
-                    )
-                    .child(div().w(px(50.)).child(fmt_time(duration))),
-            );
-
-        let dim = |id: &'static str, path: &'static str| {
-            round_button(id, 32.).group(id).child(
-                svg().path(path).size(px(16.)).text_color(rgba(ICON_DIM)).group_hover(id, |s| s.text_color(c(WHITE))),
-            )
-        };
-        let right = div()
-            .flex_1()
-            .min_w_0()
-            .h(px(32.))
-            .mt(px(12.))
-            .flex()
-            .flex_row()
-            .justify_end()
-            .items_center()
-            .child(dim("lyrics", "icons/mic.svg"))
-            .child(dim("queue", "icons/queue.svg"))
-            .child(dim("connect", "icons/device.svg"))
-            .child(
-                div()
-                    .w(px(125.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .child(
-                        round_button("mute", 32.)
-                            .group("mute")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let target = if volume == 0 { 50 } else { 0 };
-                                this.player(Play::Volume(target), cx)
-                            }))
-                            .child(
-                                svg()
-                                    .path(if volume == 0 { "icons/volume_mute.svg" } else { "icons/volume.svg" })
-                                    .size(px(16.))
-                                    .text_color(c(TEXT_SUBDUED))
-                                    .group_hover("mute", |s| s.text_color(c(WHITE))),
-                            ),
-                    )
-                    .child(
-                        slider("volume", volume as f32 / 100., self.slider_drag.is_some_and(|d| d.0 == Slider::Volume), self.volume_bounds.clone(), {
-                            let this = cx.entity().downgrade();
-                            move |f, _, cx| {
-                                let _ = this.update(cx, |this, cx| {
-                                    this.slider_drag = Some((Slider::Volume, f));
-                                    this.live_volume(f, cx);
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .w(px(93.)),
-                    ),
-            )
-            .child(dim("pip", "icons/pip.svg").ml(px(8.)))
-            .child(dim("fullscreen", "icons/fullscreen.svg"));
-
-        div()
-            .flex_none()
-            .mx(px(8.))
-            .mb(px(8.))
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .h(px(72.))
-                    .pt(px(7.6))
-                    .px(px(8.))
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .child(left)
-                    .child(center)
-                    .child(right),
-            )
-            .when_some(remote_device, |d, name| {
-                d.child(
-                    div()
-                        .h(px(24.))
-                        .rounded(px(4.))
-                        .bg(c(GREEN))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .items_center()
-                        .gap(px(8.))
-                        .pr(px(8.))
-                        .text_size(px(14.))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(c(0x000000))
-                        .child(icon("icons/speaker.svg", 16., 0x000000))
-                        .child(format!("Playing on {}", name.to_uppercase())),
-                )
-            })
-    }
-}
+// ---------- player bar (player_bar.rs) ------------------------------------------------------
 
 /// Seek / volume bar. Hover (or an active drag): fill turns green and a 12px knob appears
 /// (Spotify behaviour). Pressing starts a drag (`on_press` gets the fraction under the pointer);
@@ -2933,9 +2743,21 @@ impl Render for Shell {
             self.focused_once = true;
         }
         let vw = f32::from(window.viewport_size().width);
-        let left_w = if self.left_collapsed { LEFT_RAIL } else { self.left_w };
-        // main view = viewport - outer gutters (8+8) - sidebars - resize gaps (8+8)
-        let main_w = vw - 16. - left_w - self.right_w - 16.;
+        let lyrics_open = self.page == Page::Lyrics;
+        let right_open = self.right_panel != RightPanel::None;
+        // The lyrics view takes Your Library's place too.
+        let left_w = if lyrics_open { -8. } else if self.left_collapsed { LEFT_RAIL } else { self.left_w };
+        let right_w = if right_open { self.right_w + 8. } else { 0. };
+        // main view = viewport - outer gutters (8+8) - sidebars - resize gaps (8 each)
+        let main_w = vw - 16. - left_w - 8. - right_w;
+        // Debug: SPOTIRUST_MINI=1 opens the miniplayer once the player bar has a track (captures).
+        if self.miniplayer.is_none() && self.playback.is_some() && std::env::var_os("SPOTIRUST_MINI").is_some() && !self.mini_debug_done {
+            self.mini_debug_done = true;
+            self.open_miniplayer(window, cx);
+        }
+        if self.fx_animating() {
+            window.request_animation_frame();
+        }
         div()
             .size_full()
             .flex()
@@ -2998,6 +2820,9 @@ impl Render for Shell {
                     if this.drag.take().is_some() {
                         cx.notify();
                     }
+                    if this.bar_fx.press.take().is_some() {
+                        cx.notify();
+                    }
                     this.finish_slider(cx);
                 }),
             )
@@ -3010,8 +2835,7 @@ impl Render for Shell {
                     .mb(px(8.))
                     .flex()
                     .flex_row()
-                    .child(self.library(window, cx))
-                    .child(self.resize_bar(Side::Left, cx))
+                    .when(!lyrics_open, |d| d.child(self.library(window, cx)).child(self.resize_bar(Side::Left, cx)))
                     .child({
                         let page = match self.page.clone() {
                             Page::Home => self.home_view(main_w, cx).into_any_element(),
@@ -3020,6 +2844,7 @@ impl Render for Shell {
                             Page::Browse => self.browse_view(main_w, window, cx),
                             Page::Artist(uri) => self.artist_view(&uri, main_w, window, cx),
                             Page::User(uri) => self.user_view(&uri, main_w, window, cx),
+                            Page::Lyrics => self.lyrics_view(main_w, window, cx),
                         };
                         // GPUI clips children to the panel's rectangle, not its 8px rounded corners, so
                         // full-bleed content (sticky header, About image) would square them off: mask
@@ -3037,10 +2862,13 @@ impl Render for Shell {
                             .child(corner("icons/corner_bl.svg").bottom_0().left_0())
                             .child(corner("icons/corner_br.svg").bottom_0().right_0())
                     })
-                    .child(self.resize_bar(Side::Right, cx))
-                    .child(match self.right_panel {
-                        RightPanel::NowPlaying => self.now_playing_panel(cx).into_any_element(),
-                        RightPanel::Friends => self.friends_panel(cx).into_any_element(),
+                    .when(right_open, |d| d.child(self.resize_bar(Side::Right, cx)))
+                    .children(match self.right_panel {
+                        RightPanel::None => None,
+                        RightPanel::NowPlaying => Some(self.now_playing_panel(cx).into_any_element()),
+                        RightPanel::Friends => Some(self.friends_panel(cx).into_any_element()),
+                        RightPanel::Queue => Some(self.queue_panel(cx).into_any_element()),
+                        RightPanel::Devices => Some(self.devices_panel(cx).into_any_element()),
                     }),
             )
             .child(self.player_bar(cx))
@@ -3069,6 +2897,8 @@ impl Render for Shell {
                         ),
                 )
             })
+            .children(self.cinema_view(window, cx))
+            .children(self.bar_tooltip(vw))
     }
 }
 

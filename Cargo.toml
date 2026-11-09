@@ -24,7 +24,7 @@ tiny_http = "0.12.0"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time"] }
 ttf-parser = "0.25.1"
 ureq = { version = "2", features = ["json"] }
-windows = { version = "0.61", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation"] }
+windows = { version = "0.61", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 woff2-patched = "0.4.0"
 zenavif = "0.1.6"
 zenpixels = "0.2"

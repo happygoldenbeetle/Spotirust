@@ -265,6 +265,42 @@ impl Api {
     /// (track, position, "Playing on" device), paused. The Web API forgets an idle device after a
     /// while (204), so the last real response is kept on disk; recently-played is the fallback
     /// when there is none (it has no position, so that starts at 0:00).
+    /// The user's Connect devices (the Connect panel).
+    pub fn devices(&self) -> Result<Vec<Device>> {
+        #[derive(Deserialize)]
+        struct Devices {
+            devices: Vec<Device>,
+        }
+        Ok(self.get::<Devices>("/me/player/devices")?.devices)
+    }
+
+    /// Moves playback to `device_id` (keeps playing if it was).
+    pub fn transfer(&self, device_id: &str, play: bool) -> Result<()> {
+        self.send("PUT", "/me/player", Some(serde_json::json!({ "device_ids": [device_id], "play": play })))
+    }
+
+    /// What plays now and what's up next (the Queue panel).
+    pub fn queue(&self) -> Result<(Option<Track>, Vec<Track>)> {
+        #[derive(Deserialize)]
+        struct Queue {
+            currently_playing: Option<Track>,
+            #[serde(default)]
+            queue: Vec<Track>,
+        }
+        let q: Option<Queue> = self.get_opt("/me/player/queue")?;
+        Ok(q.map(|q| (q.currently_playing, q.queue)).unwrap_or_default())
+    }
+
+    /// Recently played tracks, newest first (the Queue panel's second tab).
+    pub fn recently_played(&self) -> Result<Vec<Track>> {
+        #[derive(Deserialize)]
+        struct Played {
+            track: Track,
+        }
+        let page: Paging<Played> = self.get("/me/player/recently-played?limit=50")?;
+        Ok(page.items.into_iter().flatten().map(|p| p.track).collect())
+    }
+
     /// One track's metadata (for the built-in player's track changes).
     pub fn track(&self, id: &str) -> Result<Track> {
         self.get(&format!("/tracks/{id}"))
@@ -352,11 +388,15 @@ pub struct Playlist {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Artist {
     pub name: String,
+    #[serde(default)]
+    pub uri: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Album {
     pub name: String,
+    #[serde(default)]
+    pub uri: String,
     #[serde(default)]
     pub images: Vec<Image>,
 }
@@ -364,6 +404,8 @@ pub struct Album {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Track {
     pub id: Option<String>,
+    #[serde(default)]
+    pub uri: String,
     pub name: String,
     pub duration_ms: u64,
     #[serde(default)]
@@ -375,6 +417,11 @@ pub struct Track {
 pub struct Device {
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
+    pub is_active: bool,
+    /// `Computer`, `Smartphone`, `Speaker`, ...
+    #[serde(rename = "type", default)]
+    pub kind: String,
     pub name: String,
     pub volume_percent: Option<u32>,
 }
