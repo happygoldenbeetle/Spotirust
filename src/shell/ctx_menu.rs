@@ -604,10 +604,18 @@ impl Shell {
                 let Some(api) = api else { return };
                 let name = self.playlist_pages.get(&pl).map(|p| p.name.clone()).unwrap_or_default();
                 let pl2 = pl.clone();
+                // The row goes now; the page then refreshes in place (no blank, no jump to the top).
+                if let Some(page) = self.playlist_pages.get_mut(&pl) {
+                    let before = page.tracks.len();
+                    page.tracks.retain(|t| t.uri != uri);
+                    page.total = page.total.saturating_sub(before - page.tracks.len());
+                }
+                if let Some(set) = self.pl_contents.get_mut(&pl) {
+                    set.remove(&uri);
+                }
                 self.background_then(cx, format!("Removed from {name}."), move || api.remove_from_playlist(&pl, &uri), move |this, cx| {
-                    this.playlist_pages.remove(&pl2);
-                    this.loading_pages.remove(&pl2);
-                    this.page_changed(cx);
+                    this.refresh_page(pl2, cx);
+                    this.reload_library(cx);
                 });
             }
             Act::AddTo(pl, uri) => {

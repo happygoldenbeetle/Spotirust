@@ -35,8 +35,11 @@ pub struct Spotify {
     rt: tokio::runtime::Runtime,
     session: Session,
     web: Mutex<Token>,
-    connection: Mutex<Option<String>>,
-    presence_changes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The dealer connection's current id (it changes when the connection is re-made).
+    connection: std::sync::Arc<Mutex<Option<String>>>,
+    dealer_start: Mutex<()>,
+    /// Friends' activity pushed since the last `take_listening_pushes`.
+    listening_pushes: std::sync::Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 fn cache_dir() -> PathBuf {
@@ -71,7 +74,7 @@ impl Spotify {
             session.connect(credentials, true).await.context("librespot connect")?;
             anyhow::Ok(session)
         })?;
-        Ok(Self { rt, session, web: Mutex::new(web), connection: Mutex::new(None), presence_changes: Default::default() })
+        Ok(Self { rt, session, web: Mutex::new(web), connection: Default::default(), dealer_start: Mutex::new(()), listening_pushes: Default::default() })
     }
 
     fn web_token(&self) -> Result<String> {
@@ -131,6 +134,7 @@ impl Spotify {
                 "includeFoldersWhenFlattening": true
             }),
         )
+        .inspect(|v| dump("library", v))
     }
 
     /// Blocking: a playlist page as the client loads it (`fetchPlaylist`): header, colours, owner,
@@ -174,13 +178,9 @@ impl Spotify {
 
     /// Blocking: GET on spclient (`spclient.wg.spotify.com<path>`) with the session's tokens, as JSON.
     fn spclient_json(&self, path: &str) -> Result<serde_json::Value> {
-        self.spclient_json_at("spclient.wg.spotify.com", path)
-    }
-
-    fn spclient_json_at(&self, host: &str, path: &str) -> Result<serde_json::Value> {
         let (bearer, client_token) = self.partner_tokens()?;
         crate::http::agent()
-            .get(&format!("https://{host}{path}"))
+            .get(&format!("https://spclient.wg.spotify.com{path}"))
             .set("authorization", &format!("Bearer {bearer}"))
             .set("client-token", &client_token)
             .set("accept", "application/json")
@@ -214,45 +214,65 @@ impl Spotify {
         Ok(v)
     }
 
-    /// Blocking: what friends are listening to (`presence-view/v1/buddylist`), for the
-    /// Listening activity panel.
-    /// The dealer (push) connection's id, starting the connection on first use. The friend feed
-    /// is keyed on it, and friends' activity changes arrive on `hm://presence2/user/...`, which
-    /// bump `presence_changes`.
-    fn connection_id(&self) -> Result<String> {
-        let mut conn = self.connection.lock().unwrap();
-        if let Some(id) = conn.clone() {
+    /// The dealer (push) connection's id, starting the connection on first use. Subscriptions to
+    /// friends' activity are keyed on it; their changes then arrive on `hm://listening-activity/`
+    /// and queue for `take_listening_pushes`. The id changes when the connection is re-made.
+    pub fn connection_id(&self) -> Result<String> {
+        if let Some(id) = self.connection.lock().unwrap().clone() {
             return Ok(id);
         }
-        let changes = self.presence_changes.clone();
-        let id = self.rt.block_on(async {
+        let _starting = self.dealer_start.lock().unwrap();
+        if let Some(id) = self.connection.lock().unwrap().clone() {
+            return Ok(id);
+        }
+        let conn = self.connection.clone();
+        let pushes = self.listening_pushes.clone();
+        self.rt.block_on(async {
             use futures_util::StreamExt;
+            use librespot_core::dealer::protocol::PayloadValue;
             let dealer = self.session.dealer();
             let mut ids = dealer.listen_for("hm://pusher/v1/connections/", |m| {
                 Ok(m.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("Spotify-Connection-Id")).map(|(_, v)| v.clone()))
             })?;
-            let mut presence = dealer.listen_for("hm://presence2/user", |_| Ok(()))?;
+            // `{username, activity: {uri, contextUri, isPlaying, timestamp}}`
+            let mut activity = dealer.listen_for("hm://listening-activity/", |m| {
+                let text = match &m.payload {
+                    PayloadValue::Raw(b) => String::from_utf8_lossy(b).into_owned(),
+                    PayloadValue::Json(j) => j.clone(),
+                    PayloadValue::Empty => String::new(),
+                };
+                let mut v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                if let Some(inner) = v.as_str().and_then(|s| serde_json::from_str(s).ok()) {
+                    v = inner;
+                }
+                Ok(v)
+            })?;
             dealer.start().await?;
             tokio::spawn(async move {
-                while presence.next().await.is_some() {
-                    changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-            });
-            let id = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                while let Some(m) = ids.next().await {
-                    if let Ok(Some(id)) = m {
-                        return Some(id);
+                while let Some(m) = activity.next().await {
+                    if let Ok(v) = m {
+                        if v.get("username").is_some() {
+                            pushes.lock().unwrap().push(v);
+                        }
                     }
                 }
-                None
-            })
-            .await
-            .ok()
-            .flatten();
-            id.ok_or_else(|| anyhow!("no dealer connection id"))
+            });
+            let (first, mut got) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                let mut first = Some(first);
+                while let Some(m) = ids.next().await {
+                    if let Ok(Some(id)) = m {
+                        *conn.lock().unwrap() = Some(id);
+                        if let Some(tx) = first.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), &mut got).await.map_err(|_| anyhow!("no dealer connection id"))?.ok();
+            anyhow::Ok(())
         })?;
-        *conn = Some(id.clone());
-        Ok(id)
+        self.connection.lock().unwrap().clone().ok_or_else(|| anyhow!("no dealer connection id"))
     }
 
     /// Blocking: starts the built-in Connect device on this runtime.
@@ -260,23 +280,54 @@ impl Spotify {
         crate::player::LocalPlayer::start(&self.rt)
     }
 
-    /// Counter bumped whenever a friend's listening activity changes.
-    pub fn presence_changes(&self) -> u64 {
-        self.presence_changes.load(std::sync::atomic::Ordering::Relaxed)
+    /// Friends' activity pushed since the last call:
+    /// `{username, activity: {uri, contextUri, isPlaying, timestamp}}`.
+    pub fn take_listening_pushes(&self) -> Vec<serde_json::Value> {
+        std::mem::take(&mut *self.listening_pushes.lock().unwrap())
     }
 
-    pub fn buddylist(&self) -> Result<serde_json::Value> {
-        // As the client does: `v2/init-friend-feed/{dealer connection id}` returns the current
-        // list (and subscribes the connection to updates). `v1/buddylist` lags by days.
-        let v = match self.connection_id() {
-            Ok(id) => self.spclient_json(&format!("/presence-view/v2/init-friend-feed/{id}"))?,
-            Err(e) => {
-                eprintln!("dealer: {e:#}");
-                self.spclient_json("/presence-view/v1/buddylist")?
-            }
-        };
-        dump("buddylist", &v);
+    /// Blocking: what the people you follow last played, for the Listening activity panel
+    /// (`listening-activity/v1/feed`, as the client asks):
+    /// `entities[].userEntity | followEntity {uri, activity {entityUri, contextUri, isPlaying, timestamp}}`.
+    pub fn listening_feed(&self) -> Result<serde_json::Value> {
+        let v = self.spclient_post("/listening-activity/v1/feed", &serde_json::json!({ "unused": true, "resultLimit": 100 }))?;
+        dump("listening_feed", &v);
         Ok(v)
+    }
+
+    /// Blocking: subscribes this push connection to those friends' activity
+    /// (`listening-activity/v1/subscribe`). The reply holds `subscriptionExpirationTimestamp`.
+    pub fn subscribe_listening(&self, usernames: &[String], connection_id: &str) -> Result<serde_json::Value> {
+        let subs: Vec<serde_json::Value> =
+            usernames.iter().map(|u| serde_json::json!({ "username": u, "pusher": { "connectionId": connection_id } })).collect();
+        let v = self.spclient_post("/listening-activity/v1/subscribe", &serde_json::json!({ "subscriptions": subs }))?;
+        dump("listening_subscribe", &v);
+        Ok(v)
+    }
+
+    /// Blocking: a user's display name and picture (`user-profile-view/v3/profile/<username>`).
+    pub fn user_brief(&self, username: &str) -> Result<(String, Option<String>)> {
+        let v = self.spclient_json(&format!("/user-profile-view/v3/profile/{}?market=from_token", percent_encode(username)))?;
+        let name = v.get("name").and_then(|n| n.as_str()).unwrap_or(username).to_string();
+        Ok((name, v.get("image_url").and_then(|u| u.as_str()).map(str::to_string)))
+    }
+
+    /// Blocking: POST on spclient with a JSON body; the reply as JSON (null when it's empty).
+    fn spclient_post(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
+        let (bearer, client_token) = self.partner_tokens()?;
+        let text = crate::http::agent()
+            .post(&format!("https://spclient.wg.spotify.com{path}"))
+            .set("authorization", &format!("Bearer {bearer}"))
+            .set("client-token", &client_token)
+            .set("accept", "application/json")
+            .set("content-type", "application/json")
+            .send_string(&body.to_string())
+            .map_err(|e| match e {
+                ureq::Error::Status(code, r) => anyhow!("{path} -> {code}: {}", r.into_string().unwrap_or_default()),
+                e => anyhow!(e),
+            })?
+            .into_string()?;
+        Ok(serde_json::from_str(&text).unwrap_or_default())
     }
 
     /// Blocking: the Browse page ("Browse all" category cards), `browseAll`.
@@ -460,3 +511,12 @@ fn dump(name: &str, v: &serde_json::Value) {
     }
 }
 
+
+fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}

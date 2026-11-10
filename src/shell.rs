@@ -167,6 +167,11 @@ pub struct Shell {
     /// Miniplayer card colour: (cover url, its extracted dark colour), and the cover being fetched.
     mini_color: Option<(String, u32)>,
     mini_color_loading: Option<String>,
+    /// Friend activity seen so far (raw `presence-view` entries), and the live watcher's generation.
+    friends_raw: Vec<serde_json::Value>,
+    friends_watch_seq: u64,
+    /// Ask for the friend feed again (set when the panel opens).
+    friends_refresh: bool,
 }
 
 /// What the right panel shows.
@@ -413,6 +418,9 @@ impl Shell {
             pl_counts: HashMap::new(),
             mini_color: None,
             mini_color_loading: None,
+            friends_raw: Vec::new(),
+            friends_watch_seq: 0,
+            friends_refresh: false,
         };
         // Debug: SPOTIRUST_LEFT=rail | <width> starts with that library width.
         match std::env::var("SPOTIRUST_LEFT").ok().as_deref() {
@@ -486,8 +494,8 @@ impl Shell {
                         if let Err(e) = sp.notifications() {
                             eprintln!("dump notifications: {e:#}");
                         }
-                        if let Err(e) = sp.buddylist() {
-                            eprintln!("dump buddylist: {e:#}");
+                        if let Err(e) = sp.listening_feed() {
+                            eprintln!("dump listening feed: {e:#}");
                         }
                         if let Err(e) = sp.browse_all() {
                             eprintln!("dump browse: {e:#}");
@@ -526,6 +534,7 @@ impl Shell {
                     Ok((sp, feed, lib, local_slot)) => {
                         this.spotify = Some(sp);
                         this.start_local(local_slot, cx);
+                        this.start_friend_feed(cx);
                         // Test hook: open Listening activity without clicking (captures).
                         if std::env::var_os("SPOTIRUST_OPEN_FRIENDS").is_some() {
                             this.toggle_friends(cx);
@@ -1165,13 +1174,18 @@ impl Shell {
     /// playlists via `fetchPlaylist` (100 a page), albums via `getAlbum` (50), Liked Songs via the
     /// Web API's saved tracks (50).
     fn load_page(&mut self, uri: String, cx: &mut Context<Self>) {
+        if !self.playlist_pages.contains_key(&uri) {
+            self.refresh_page(uri, cx);
+        }
+    }
+
+    /// Fetches a collection page again, keeping what's cached on screen until the new one arrives
+    /// (after a change to its tracks).
+    fn refresh_page(&mut self, uri: String, cx: &mut Context<Self>) {
         let Some(sp) = self.spotify.clone() else { return };
         let api = self.api.clone();
         let me = self.me.clone();
-        if uri == LIKED_URI && me.is_none() {
-            return;
-        }
-        if self.playlist_pages.contains_key(&uri) || !self.loading_pages.insert(uri.clone()) {
+        if (uri == LIKED_URI && me.is_none()) || !self.loading_pages.insert(uri.clone()) {
             return;
         }
         cx.spawn(async move |this, cx| {

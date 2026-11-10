@@ -92,7 +92,12 @@ impl Shell {
             let counts = cx.background_executor().spawn(async move { (a.my_playlist_counts(), a.liked_count()) }).await;
             let _ = this.update(cx, |this, cx| {
                 if let Ok(c) = counts.0 {
-                    this.pl_counts.extend(c);
+                    // This count lags behind changes: prefer one taken from the playlist's tracks.
+                    for (u, n) in c {
+                        if !this.pl_contents.contains_key(&u) {
+                            this.pl_counts.insert(u, n);
+                        }
+                    }
                 }
                 if let Ok(n) = counts.1 {
                     this.pl_counts.insert(LIKED_URI.to_string(), n);
@@ -221,9 +226,16 @@ impl Shell {
                 if let Some(n) = self.pl_counts.get_mut(u) {
                     *n = if *add { *n + 1 } else { n.saturating_sub(1) };
                 }
-                self.playlist_pages.remove(u);
+                if !*add {
+                    if let Some(page) = self.playlist_pages.get_mut(u) {
+                        let before = page.tracks.len();
+                        page.tracks.retain(|t| t.uri != track);
+                        page.total = page.total.saturating_sub(before - page.tracks.len());
+                    }
+                }
             }
         }
+        let changed: Vec<String> = changes.iter().map(|(u, _, _)| if u.is_empty() { LIKED_URI.to_string() } else { u.clone() }).collect();
         let id = track.rsplit(':').next().unwrap_or_default().to_string();
         self.background_then(
             cx,
@@ -240,10 +252,23 @@ impl Shell {
                 }
                 Ok(())
             },
-            |this, cx| {
-                this.playlist_pages.remove(LIKED_URI);
-                if matches!(this.page, Page::Liked) {
-                    this.page_changed(cx);
+            move |this, cx| {
+                // The page being viewed refreshes in place; the others load again when opened.
+                let open = match &this.page {
+                    Page::Liked => Some(LIKED_URI.to_string()),
+                    Page::Playlist(u) => Some(u.clone()),
+                    _ => None,
+                };
+                for u in &changed {
+                    if open.as_ref() == Some(u) {
+                        this.refresh_page(u.clone(), cx);
+                    } else {
+                        this.playlist_pages.remove(u);
+                    }
+                }
+                // Covers and the library order follow a playlist's tracks.
+                if changed.iter().any(|u| u != LIKED_URI) {
+                    this.reload_library(cx);
                 }
             },
         );
@@ -365,10 +390,8 @@ impl Shell {
             }
             let now = self.in_playlist(&p.uri, &pop.track);
             let checked = pop.want.get(&p.uri).copied().unwrap_or(now);
-            let art = match p.image.as_deref() {
-                Some(u) => img(ImageSource::from(images::variant(u, images::Variant::Small))).size(px(40.)).into_any_element(),
-                None => div().size_full().flex().items_center().justify_center().child(icon("icons/note.svg", 16., TEXT_SUBDUED)).into_any_element(),
-            };
+            // The library's cover (resolved mosaics included).
+            let art = lib_art(&p, 40., cx);
             let row = self.pop_row(format!("pop-pl-{i}"), art, p.name.clone(), self.pl_counts.get(&p.uri).copied(), p.pinned, checked, Some(p.uri.clone()), cx);
             if now { saved_in.push(row) } else { others.push(row) }
         }
