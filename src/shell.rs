@@ -31,6 +31,7 @@ mod side_panels;
 mod lyrics_view;
 mod miniplayer;
 mod add_popover;
+mod search_view;
 
 use std::collections::{HashMap, HashSet};
 
@@ -42,6 +43,7 @@ use crate::{
     home::{self, HomeFeed, Item, Kind, Shelf},
     images,
     library::{self, LibItem, LibKind},
+    search,
     spotify::Spotify,
     theme::*,
 };
@@ -112,6 +114,10 @@ pub struct Shell {
     page_scroll: gpui::ScrollHandle,
     artist_pages: HashMap<String, ArtistPage>,
     user_pages: HashMap<String, UserPage>,
+    /// The search box and its dropdown.
+    search: search_view::SearchUi,
+    /// Search results per query and filter chip.
+    search_pages: HashMap<(String, search::Filter), search::Results>,
     lib_prefs: library_view::LibPrefs,
     lib_menu: bool,
     /// View-as highlight animation: index it slides from, and a counter that restarts it.
@@ -201,6 +207,8 @@ pub enum Page {
     Browse,
     /// The expanded Now Playing view in lyrics mode (player bar mic button).
     Lyrics,
+    /// Search results for a query, under one of the filter chips (`/search/<query>/<filter>`).
+    Search(String, search::Filter),
 }
 
 impl Page {
@@ -379,6 +387,8 @@ impl Shell {
             page_scroll: gpui::ScrollHandle::new(),
             artist_pages: HashMap::new(),
             user_pages: HashMap::new(),
+            search: search_view::SearchUi::new(),
+            search_pages: HashMap::new(),
             lib_prefs: library_view::LibPrefs::load(),
             // Debug: SPOTIRUST_LIBMENU=1 opens the library Sort/View menu (for captures).
             lib_menu: std::env::var_os("SPOTIRUST_LIBMENU").is_some(),
@@ -427,6 +437,10 @@ impl Shell {
             Some("rail") => this.left_collapsed = true,
             Some(w) => this.left_w = w.parse().unwrap_or(this.left_w).clamp(LEFT_MIN, LEFT_MAX),
             None => {}
+        }
+        // Debug: SPOTIRUST_RIGHT=<width> starts with that right panel width.
+        if let Some(w) = std::env::var("SPOTIRUST_RIGHT").ok().and_then(|w| w.parse::<f32>().ok()) {
+            this.right_w = w.clamp(RIGHT_MIN, RIGHT_MAX);
         }
         if let Some(api) = api {
             this.load(api.clone(), cx);
@@ -484,6 +498,15 @@ impl Shell {
                             Err(e) => eprintln!("dump playlist: {e:#}"),
                         }
                     }
+                    // Debug: SPOTIRUST_DUMP_SEARCH=<query> writes every search response (with SPOTIRUST_DUMP).
+                    if let Ok(q) = std::env::var("SPOTIRUST_DUMP_SEARCH") {
+                        let _ = sp.recent_searches().map_err(|e| eprintln!("recent searches: {e:#}"));
+                        let _ = sp.search_suggestions(&q).map_err(|e| eprintln!("suggestions: {e:#}"));
+                        let _ = sp.search_top(&q, 0).map_err(|e| eprintln!("search top: {e:#}"));
+                        for kind in ["tracks", "albums", "artists", "playlists", "users", "audiobooks", "authors"] {
+                            let _ = sp.search_kind(kind, &q, 0).map_err(|e| eprintln!("search {kind}: {e:#}"));
+                        }
+                    }
                     if let Ok(id) = std::env::var("SPOTIRUST_DUMP_USER") {
                         if let Err(e) = sp.user_profile(&id) {
                             eprintln!("dump user: {e:#}");
@@ -538,6 +561,17 @@ impl Shell {
                         // Test hook: open Listening activity without clicking (captures).
                         if std::env::var_os("SPOTIRUST_OPEN_FRIENDS").is_some() {
                             this.toggle_friends(cx);
+                        }
+                        this.load_recents(cx);
+                        // Test hooks: SPOTIRUST_SEARCH="<query>|<filter>" starts on a search page;
+                        // SPOTIRUST_SEARCH_TYPE=<text> puts the caret in the box with that typed
+                        // (empty: just the caret); SPOTIRUST_SEARCH_SELECT=<n> arrows down n times.
+                        if let Ok(q) = std::env::var("SPOTIRUST_SEARCH") {
+                            let (q, f) = q.split_once('|').unwrap_or((q.as_str(), ""));
+                            this.open(Page::Search(q.to_string(), search::Filter::from_path(f)), cx);
+                        }
+                        if let Ok(text) = std::env::var("SPOTIRUST_SEARCH_TYPE") {
+                            this.debug_type(&text, cx);
                         }
                         // Test hook: start on a page (`SPOTIRUST_OPEN=spotify:artist:...`).
                         if let Some(p) = std::env::var("SPOTIRUST_OPEN").ok().as_deref().and_then(Page::for_uri) {
@@ -983,12 +1017,18 @@ impl Shell {
     /// The desktop client's playback shortcuts: Space play/pause, Ctrl+Right/Left next/previous,
     /// Ctrl+Up/Down volume ±10, Ctrl+S shuffle, Ctrl+R repeat.
     fn shortcut_key(&mut self, ev: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
-        if self.add_popover_key(ev, cx) {
+        if self.add_popover_key(ev, cx) || self.search_key(ev, cx) {
             cx.stop_propagation();
             return;
         }
         let k = &ev.keystroke;
         let ctrl = k.modifiers.control;
+        // Ctrl+L (and Ctrl+K): the caret goes to the search box, with its text selected.
+        if ctrl && matches!(k.key.as_str(), "l" | "k") {
+            self.focus_search(true, cx);
+            cx.stop_propagation();
+            return;
+        }
         let pb = self.playback.clone();
         if k.key == "escape" && (self.lib_menu || self.create_open || self.profile_open || self.ctx_menu.is_some()) {
             self.ctx_menu = None;
@@ -1155,7 +1195,13 @@ impl Shell {
 
     fn page_changed(&mut self, cx: &mut Context<Self>) {
         self.page_scroll.set_offset(gpui::Point::default());
+        self.sync_search_box();
         match self.page.clone() {
+            Page::Search(query, filter) => {
+                // "All" says which chips there are, so it's wanted under every chip.
+                self.load_search(&query, search::Filter::All, cx);
+                self.load_search(&query, filter, cx);
+            }
             Page::Playlist(uri) | Page::Album(uri) => self.load_page(uri, cx),
             Page::Liked => self.load_page(LIKED_URI.to_string(), cx),
             Page::Artist(uri) => {
@@ -1485,7 +1531,10 @@ fn round_button(id: impl Into<SharedString>, size: f32) -> Stateful<Div> {
 }
 
 fn cover(url: Option<&str>, size: f32, radius: f32, cx: &mut App) -> AnyElement {
-    let image = url.and_then(|u| images::cache(cx).update(cx, |c, cx| c.get_sized(u, size, cx)));
+    // Square boxes crop a picture that isn't square from its centre (the client's object-fit:
+    // cover), so a portrait artist photo doesn't spill out of its circle.
+    let url = url.map(|u| if u.starts_with("crop:") || u.starts_with("rot:") { u.to_string() } else { format!("crop:1x1:{u}") });
+    let image = url.and_then(|u| images::cache(cx).update(cx, |c, cx| c.get_sized(&u, size, cx)));
     match image {
         Some(image) => img(ImageSource::Render(image))
             .size(px(size))
@@ -1541,7 +1590,7 @@ fn one_line(text: impl Into<SharedString>) -> Div {
 // ---------- top bar --------------------------------------------------------------------------
 
 impl Shell {
-    fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn top_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let avatar_url = self
             .me
             .as_ref()
@@ -1628,56 +1677,7 @@ impl Shell {
                                         icon("icons/home.svg", 24., TEXT_SUBDUED).into_any_element()
                                     }),
                             )
-                            .child(
-                                div()
-                                    .id("search")
-                                    .occlude()
-                                    .relative()
-                                    .w(px(474.))
-                                    .h(px(48.))
-                                    .rounded_full()
-                                    .bg(c(ELEVATED))
-                                    .hover(|s| s.bg(c(0x2A2A2A)))
-                                    .flex()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .left(px(12.))
-                                            .top(px(12.))
-                                            .child(icon("icons/search.svg", 24., TEXT_SUBDUED)),
-                                    )
-                                    .child(
-                                        div()
-                                            .pl(px(48.))
-                                            .text_size(px(16.))
-                                            .text_color(c(TEXT_SUBDUED))
-                                            .child("What do you want to play?"),
-                                    )
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .right(px(56.))
-                                            .top(px(12.))
-                                            .w(px(1.))
-                                            .h(px(24.))
-                                            .bg(c(0x7C7C7C)),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("browse-button")
-                                            .absolute()
-                                            .left(px(434.))
-                                            .top(px(12.))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(|this, _, _, cx| this.open(Page::Browse, cx)))
-                                            .child(if self.page == Page::Browse {
-                                                icon("icons/browse_filled.svg", 24., WHITE).into_any_element()
-                                            } else {
-                                                icon("icons/browse.svg", 24., TEXT_SUBDUED).into_any_element()
-                                            }),
-                                    ),
-                            ),
+                            .child(self.search_box(window, cx)),
                     ),
             )
             // right cluster: what's new, friends, avatar (ends 151px from the right edge)
@@ -2230,7 +2230,18 @@ fn item_art(item: &Item, size: f32, radius: f32, cx: &mut App) -> AnyElement {
         Kind::LikedSongs if shortcut => shortcut_cover(Some(LIKED_SONGS_IMAGE_LARGE), size, cx),
         _ if shortcut => shortcut_cover(url.as_deref(), size, cx),
         Kind::LikedSongs => cover(Some(LIKED_SONGS_IMAGE), size, radius, cx),
-        Kind::Artist | Kind::User if radius > 0. => cover(url.as_deref(), size, size / 2., cx),
+        // Measured: an author without a picture is a #333 circle with a 64px white book.
+        Kind::Author if url.is_none() => div()
+            .size(px(size))
+            .flex_none()
+            .rounded_full()
+            .bg(c(0x333333))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(icon("icons/author24.svg", 64., WHITE))
+            .into_any_element(),
+        Kind::Artist | Kind::User | Kind::Author if radius > 0. => cover(url.as_deref(), size, size / 2., cx),
         _ => cover(url.as_deref(), size, radius, cx),
     }
 }
@@ -2312,7 +2323,7 @@ impl Shell {
     /// Green play button that fades (and for cards, slides up 8px) in when its tile is hovered,
     /// matching the reference: 0.15s, cubic-bezier(0.3, 0, 0, 1).
     fn hover_play(&self, group: &SharedString, size: f32, slide: bool, item: &Item, cx: &mut Context<Self>) -> AnyElement {
-        if self.hovered.as_ref() != Some(group) || item.kind == Kind::User {
+        if self.hovered.as_ref() != Some(group) || matches!(item.kind, Kind::User | Kind::Author) {
             return div().into_any_element();
         }
         let it = item.clone();
@@ -2367,7 +2378,7 @@ impl Shell {
             .rounded(px(6.))
             .hover(|s| s.bg(c(0x1F1F1F)))
             .cursor_pointer()
-            .when(matches!(item.kind, Kind::Playlist | Kind::Album | Kind::LikedSongs), |d| {
+            .when(matches!(item.kind, Kind::Playlist | Kind::Album | Kind::LikedSongs | Kind::Artist | Kind::User), |d| {
                 let uri = item.uri.clone();
                 d.on_click(cx.listener(move |this, _, _, cx| if let Some(p) = Page::for_uri(&uri) { this.open(p, cx) }))
             })
@@ -2390,7 +2401,8 @@ impl Shell {
             .when(!item.hide_title, |d| {
                 d.child(
                     one_line(item.name.clone())
-                        .when(sub_gap > 0., |d| d.whitespace_normal().line_clamp(2))
+                        // measured: like the subtitle, 12px narrower than the cover
+                        .when(sub_gap > 0., |d| d.whitespace_normal().line_clamp(2).w(px(img - 12.)))
                         .mt(px(8.))
                         .text_size(px(16.))
                         .line_height(px(22.4))
@@ -2895,7 +2907,7 @@ impl Render for Shell {
                     this.finish_slider(cx);
                 }),
             )
-            .child(self.top_bar(cx))
+            .child(self.top_bar(window, cx))
             .child(
                 div()
                     .flex_1()
@@ -2914,6 +2926,7 @@ impl Render for Shell {
                             Page::Artist(uri) => self.artist_view(&uri, main_w, window, cx),
                             Page::User(uri) => self.user_view(&uri, main_w, window, cx),
                             Page::Lyrics => self.lyrics_view(main_w, window, cx),
+                            Page::Search(query, filter) => self.search_view(&query, filter, main_w, window, cx),
                         };
                         // GPUI clips children to the panel's rectangle, not its 8px rounded corners, so
                         // full-bleed content (sticky header, About image) would square them off: mask
@@ -2941,6 +2954,7 @@ impl Render for Shell {
                     }),
             )
             .child(self.player_bar(cx))
+            .children(self.search_dropdown(window, cx))
             .children(self.library_menu(cx))
             .children(self.create_menu(window, cx))
             .children(self.profile_menu(window, cx))

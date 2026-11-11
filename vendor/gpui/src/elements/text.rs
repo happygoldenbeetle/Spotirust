@@ -373,6 +373,9 @@ impl TextLayout {
                 if let Some(text_layout) = element_state.0.borrow().as_ref()
                     && text_layout.size.is_some()
                     && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
+                    // A layout measured with room to spare (max-content) is no answer for a
+                    // narrower box that truncates: measure again so the ellipsis appears.
+                    && truncate_width.is_none_or(|w| text_layout.size.unwrap().width <= w + crate::px(1.))
                 {
                     return text_layout.size.unwrap();
                 }

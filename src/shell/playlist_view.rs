@@ -708,10 +708,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let group: SharedString = format!("pl-row-{i}").into();
+        // Rows outside a playlist or album (search results) play from the song's album.
+        let from_search = context.is_empty();
+        let context = if from_search { t.album_uri.as_str() } else { context };
         let artists = t.artists.iter().map(|a| a.0.as_str()).collect::<Vec<_>>().join(", ");
         let title_color = if playing { GREEN } else { WHITE };
         // Artist names are separate links; when the line would be cut off it stays one ellipsized text.
-        let artist_room = first_w - if t.number == 0 { 52.8 } else { 0.8 } - if t.explicit { 20. } else { 0. };
+        let artist_room = first_w - 8. - if t.number == 0 { 52.8 } else { 0.8 } - if t.explicit { 20. } else { 0. };
         let link_artists = text_width(window, &artists, 14., gpui::font(ui_font())) <= artist_room;
         let (ctx, track) = (context.to_string(), t.uri.clone());
         let mut row = div()
@@ -784,6 +787,8 @@ impl Shell {
                         div()
                             .flex_1()
                             .min_w_0()
+                            // measured: the texts end 8px before the column does
+                            .pr(px(8.))
                             .flex()
                             .flex_col()
                             .child({
@@ -821,7 +826,7 @@ impl Shell {
                                             div()
                                                 .size(px(16.))
                                                 .flex_none()
-                                                .rounded(px(2.))
+                                                .rounded(px(4.))
                                                 .bg(rgba(0xFFFFFF1A))
                                                 .flex()
                                                 .items_center()
@@ -911,7 +916,8 @@ impl Shell {
                         .text_size(px(14.))
                         .line_height(px(19.2))
                         .text_color(c(TEXT_SUBDUED))
-                        .child(fmt_time(if t.number > 0 { t.duration_ms } else { (t.duration_ms + 500) / 1000 * 1000 })),
+                        // Playlists round to the second; albums and search results drop the rest.
+                        .child(fmt_time(if t.number > 0 || from_search { t.duration_ms } else { (t.duration_ms + 500) / 1000 * 1000 })),
                 )
                 .child(
                     div()

@@ -26,6 +26,18 @@ const LIBRARY_HASH: &str = "390c78e5b951029bad359785e69b07b536a509c581cbcd0aded5
 /// Persisted query captured from the real client's album page (2026-11-07).
 /// Persisted query captured from the real client's artist page (2026-11-08).
 const ARTIST_HASH: &str = "9f8134ef565e78621f1e1793555bd6633c5ac144ae0f89604ed3ae3f80b3c8e6";
+// Search (the top bar's dropdown, `/search/<query>` and its filter pages), from the 1.2.x client.
+const SEARCH_SUGGESTIONS_HASH: &str = "f244254b94c0e824d458ac216e0f8406a73f2f69a9ff52831a2f78fa774ff6ce";
+const SEARCH_TOP_HASH: &str = "dd78eaff943eba629ed70ee25517b9cea0dcaa41193e2592ae2727660b21892c";
+const SEARCH_TRACKS_HASH: &str = "b02683192a98dde7966b5e6655a79eeb62713eab703eda9902c932818dd52751";
+const SEARCH_ALBUMS_HASH: &str = "202cb3305e31e5a0767ba7925f28bd728cf8f8b0217e6da43909056071cd70e9";
+const SEARCH_ARTISTS_HASH: &str = "7bf95d754fdbe32c8b161fbbe54d1ae50974900df4dce4c8f1afcbcad153224d";
+const SEARCH_PLAYLISTS_HASH: &str = "d520014e748f9ea44f7707d8df1819867ac1205e8b7f3e28f22fe5fc858921b1";
+const SEARCH_USERS_HASH: &str = "8f358dd82e62f61dd4ceaa9f8cd0889e644c9b707f1b724fbfb356a757cb7e5a";
+const SEARCH_AUDIOBOOKS_HASH: &str = "e05ac765d02c084f8783d3c1572b23d57761c43f47eb8b87ce2f9ccced3fa068";
+const SEARCH_AUTHORS_HASH: &str = "4a9d403a7cbc7e19da5520d619a865472b35382b043bfa458154e73a5c6f46bd";
+/// One document holds `recentSearches`, `saveRecentSearches` and `removeRecentSearches`.
+const RECENT_SEARCHES_HASH: &str = "ece96d7b82c820fb9938dd1df50dee3e53737d808c3883e3d01c467c423601b0";
 const BROWSE_ALL_HASH: &str = "dbd8b55e09a58afc52eab438bc228ba28fd72ac2f2148c6c26354980e4579001";
 const USER_TOP_HASH: &str = "61b7353d3625780022dbc63d459eb64cd609e7e5e2a820f9160d65030efe2e15";
 const EXTRACTED_COLORS_HASH: &str = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
@@ -331,6 +343,99 @@ impl Spotify {
     }
 
     /// Blocking: the Browse page ("Browse all" category cards), `browseAll`.
+    /// The search box's dropdown while typing: completed queries and matching things.
+    pub fn search_suggestions(&self, query: &str) -> Result<serde_json::Value> {
+        self.pathfinder(
+            "searchSuggestions",
+            SEARCH_SUGGESTIONS_HASH,
+            serde_json::json!({
+                "query": query,
+                "limit": 30,
+                "numberOfTopResults": 30,
+                "offset": 0,
+                "includeAuthors": true,
+                "includeAlbumPreReleases": false,
+                "includeEpisodeContentRatingsV2": true
+            }),
+        )
+        .inspect(|v| dump("search_suggestions", v))
+    }
+
+    /// `/search/<query>`: the top result, its "Featuring" shelf and the mixed list under it.
+    pub fn search_top(&self, query: &str, offset: u32) -> Result<serde_json::Value> {
+        self.pathfinder(
+            "searchTopResultsList",
+            SEARCH_TOP_HASH,
+            serde_json::json!({
+                "query": query,
+                "limit": 50,
+                "offset": offset,
+                "numberOfTopResults": 50,
+                "includeArtistHasConcertsField": false,
+                "includeAudiobooks": true,
+                "includeAuthors": true,
+                "includePreReleases": true,
+                "includeAlbumPreReleases": false,
+                "includeEpisodeContentRatingsV2": true,
+                "isPrefix": null,
+                "sectionFilters": ["GENERIC", "VIDEO_CONTENT"]
+            }),
+        )
+        .inspect(|v| dump("search_top", v))
+    }
+
+    /// A filter page of `/search/<query>/<kind>` (`tracks`, `albums`, `artists`, `playlists`,
+    /// `users`, `audiobooks`, `authors`), paged like the client (20 songs, 30 of the rest).
+    pub fn search_kind(&self, kind: &str, query: &str, offset: u32) -> Result<serde_json::Value> {
+        let (operation, hash) = match kind {
+            "tracks" => ("searchTracks", SEARCH_TRACKS_HASH),
+            "albums" => ("searchAlbums", SEARCH_ALBUMS_HASH),
+            "artists" => ("searchArtists", SEARCH_ARTISTS_HASH),
+            "playlists" => ("searchPlaylists", SEARCH_PLAYLISTS_HASH),
+            "users" => ("searchUsers", SEARCH_USERS_HASH),
+            "audiobooks" => ("searchAudiobooks", SEARCH_AUDIOBOOKS_HASH),
+            "authors" => ("searchAuthors", SEARCH_AUTHORS_HASH),
+            _ => return Err(anyhow!("no search page for {kind}")),
+        };
+        self.pathfinder(
+            operation,
+            hash,
+            serde_json::json!({
+                "includePreReleases": kind == "audiobooks",
+                "includeAlbumPreReleases": false,
+                "numberOfTopResults": 20,
+                "searchTerm": query,
+                "offset": offset,
+                "limit": if kind == "tracks" { 20 } else { 30 },
+                "includeAudiobooks": true,
+                "includeAuthors": true,
+                "includeEpisodeContentRatingsV2": true
+            }),
+        )
+        .inspect(|v| dump(&format!("search_{kind}"), v))
+    }
+
+    /// Recent searches (kept by the service, so every client shows the same list).
+    pub fn recent_searches(&self) -> Result<serde_json::Value> {
+        self.pathfinder(
+            "recentSearches",
+            RECENT_SEARCHES_HASH,
+            serde_json::json!({ "limit": 50, "includeAuthors": true, "includeEpisodeContentRatingsV2": true }),
+        )
+        .inspect(|v| dump("recent_searches", v))
+    }
+
+    /// Adds to (`save`) or removes from the recent searches.
+    pub fn change_recent_searches(&self, save: bool, uris: &[String]) -> Result<()> {
+        let operation = if save { "saveRecentSearches" } else { "removeRecentSearches" };
+        let v = self.pathfinder(operation, RECENT_SEARCHES_HASH, serde_json::json!({ "uris": uris }))?;
+        let result = v.pointer(if save { "/data/saveToRecentSearches" } else { "/data/removeFromRecentSearches" });
+        match result.and_then(|r| r.get("__typename")).and_then(|t| t.as_str()) {
+            Some("GenericError") | None => Err(anyhow!("{operation}: {v}")),
+            _ => Ok(()),
+        }
+    }
+
     pub fn browse_all(&self) -> Result<serde_json::Value> {
         let v = self.pathfinder(
             "browseAll",

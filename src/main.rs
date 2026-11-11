@@ -11,6 +11,7 @@ mod http;
 mod images;
 mod library;
 mod playlist;
+mod search;
 mod audio_out;
 mod player;
 mod artist;
@@ -127,6 +128,9 @@ fn main() {
             want.height = want.height.min(screen.height - px(80.));
         }
         let bounds = Bounds::centered(None, want, cx);
+        // Test hook: SPOTIRUST_OFFSCREEN=1 (test copies, moved off screen once open) doesn't bring
+        // the app to the front.
+        let offscreen = std::env::var_os("SPOTIRUST_OFFSCREEN").is_some();
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -141,6 +145,8 @@ fn main() {
             |window, cx| cx.new(|cx| Root::new(window, cx)),
         )
         .expect("failed to open window");
-        cx.activate(true);
+        if !offscreen {
+            cx.activate(true);
+        }
     });
 }

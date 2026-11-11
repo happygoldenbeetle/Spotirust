@@ -143,7 +143,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn in_library(&self, uri: &str) -> bool {
+    pub(super) fn in_library(&self, uri: &str) -> bool {
         self.library_items().iter().any(|i| i.uri == uri)
     }
 
@@ -724,7 +724,7 @@ impl Shell {
 
 impl Shell {
     /// What a `spotify:` URI's menu is.
-    fn target_for(&self, uri: &str, name: &str) -> Option<Target> {
+    pub(super) fn target_for(&self, uri: &str, name: &str) -> Option<Target> {
         let me_name = self.me.as_ref().and_then(|m| m.display_name.clone()).unwrap_or_default();
         Some(match uri.split(':').nth(1)? {
             "playlist" => Target::Playlist {

@@ -9,6 +9,8 @@ pub enum Kind {
     Artist,
     /// A user profile (round art, no play button).
     User,
+    /// An audiobook author (round art, a book when there's no picture, no play button).
+    Author,
     LikedSongs,
     Other,
 }
