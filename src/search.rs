@@ -76,8 +76,6 @@ impl Filter {
             "ARTISTS" => Self::Artists,
             "PLAYLISTS" => Self::Playlists,
             "USERS" => Self::Users,
-            "AUDIOBOOKS" => Self::Audiobooks,
-            "AUTHORS" => Self::Authors,
             _ => return None,
         })
     }
@@ -344,27 +342,33 @@ fn hit(wrapper: &Value) -> Option<Hit> {
     (!h.name.is_empty() && !h.uri.is_empty()).then_some(h)
 }
 
+/// Hits with a page (or a search) here: audiobooks, authors, podcasts and episodes have none yet,
+/// so they're left out everywhere.
+fn shown(wrapper: &Value) -> Option<Hit> {
+    hit(wrapper).filter(|h| !matches!(h.kind, HitKind::Audiobook | HitKind::Author | HitKind::Other))
+}
+
 fn entry(item: &Value) -> Option<Entry> {
     // Top results wrap each hit as `{ item, matchedFields }`; the filter pages mostly don't.
     let wrapper = item.get("item").filter(|w| w.get("data").is_some()).unwrap_or(item);
     if wrapper.get("__typename").and_then(Value::as_str) == Some("SearchSectionEntity") {
         let d = wrapper.get("data")?;
-        let hits: Vec<Hit> = d.get("items").and_then(Value::as_array).into_iter().flatten().filter_map(hit).collect();
+        let hits: Vec<Hit> = d.get("items").and_then(Value::as_array).into_iter().flatten().filter_map(shown).collect();
         let title = text(d, "/title/transformedLabel");
         return (!hits.is_empty()).then_some(Entry::Section { title, hits });
     }
-    hit(wrapper).map(Entry::Hit)
+    shown(wrapper).map(Entry::Hit)
 }
 
 /// The dropdown's list while typing.
 pub fn parse_suggestions(v: &Value) -> Vec<Hit> {
     let items = v.pointer("/data/searchV2/topResultsV2/itemsV2").and_then(Value::as_array);
-    items.into_iter().flatten().filter_map(|i| hit(i.get("item")?)).collect()
+    items.into_iter().flatten().filter_map(|i| shown(i.get("item")?)).collect()
 }
 
 pub fn parse_recents(v: &Value) -> Vec<Hit> {
     let items = v.pointer("/data/recentSearches/recentSearchesItems/items").and_then(Value::as_array);
-    items.into_iter().flatten().filter_map(hit).collect()
+    items.into_iter().flatten().filter_map(shown).collect()
 }
 
 /// A page of results for `filter` (the "All" page also carries the chips).
