@@ -40,6 +40,7 @@ mod genre_view;
 mod whats_new;
 mod disco_view;
 mod npv_sections;
+mod npv_lyrics;
 mod about_dialog;
 mod fx;
 
@@ -212,6 +213,8 @@ pub struct Shell {
     queue_tab: u8,
     devices: Option<Vec<api::Device>>,
     lyrics_scroll: lyrics_view::LyricsScroll,
+    /// The Lyrics card in Now Playing (expanded or not, and its scroll).
+    npv_lyr: npv_lyrics::NpvLyr,
     miniplayer: Option<gpui::WindowHandle<miniplayer::MiniPlayer>>,
     /// Full screen (cinema) view on.
     cinema: bool,
@@ -303,10 +306,8 @@ pub struct Lyrics {
     pub timed: Vec<(u64, String)>,
     /// LINE_SYNCED (else the lines are shown all at once, unsynced).
     pub synced: bool,
-    /// The lyrics' own colours (`colors`): background, upcoming text, active text.
-    pub view_bg: u32,
-    pub view_text: u32,
-    pub view_active: u32,
+    /// "Lyrics provided by …" (`providerDisplayName`).
+    pub provider: String,
 }
 
 impl Lyrics {
@@ -340,17 +341,13 @@ impl Lyrics {
             })
             .collect();
         let synced = v.pointer("/lyrics/syncType").and_then(|s| s.as_str()) == Some("LINE_SYNCED");
-        // `colors` are signed ARGB ints.
-        let argb = |k: &str, d: u32| v.pointer(&format!("/colors/{k}")).and_then(|x| x.as_i64()).map(|x| (x as u32) & 0xFFFFFF).unwrap_or(d);
         Some(Self {
             lines,
             background: rgb("backgroundBase").unwrap_or(0x535353),
             text: rgb("textSubdued").unwrap_or(0xFFFFFF),
             timed,
             synced,
-            view_bg: argb("background", 0x535353),
-            view_text: argb("text", 0x000000),
-            view_active: argb("highlightText", 0xFFFFFF),
+            provider: v.pointer("/lyrics/providerDisplayName").and_then(|p| p.as_str()).unwrap_or_default().to_string(),
         })
     }
 }
@@ -513,6 +510,7 @@ impl Shell {
             queue_tab: 0,
             devices: None,
             lyrics_scroll: Default::default(),
+            npv_lyr: Default::default(),
             miniplayer: None,
             cinema: false,
             mini_debug_done: false,
@@ -2977,44 +2975,7 @@ impl Shell {
                                     ),
                             )
                     })
-                    .when_some(lyrics, |d, l| {
-                        let lines: Vec<AnyElement> = l
-                            .lines
-                            .iter()
-                            .take(6)
-                            .map(|line| {
-                                div()
-                                    .font_family(title_font())
-                                    .text_size(px(24.))
-                                    .line_height(px(28.8))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(c(l.text))
-                                    .child(line.clone())
-                                    .into_any_element()
-                            })
-                            .collect();
-                        d.child(
-                            div()
-                                .mt(px(28.8))
-                                .h(px(177.))
-                                .flex_none()
-                                .rounded(px(8.))
-                                .overflow_hidden()
-                                .bg(c(l.background))
-                                .p(px(16.))
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_size(px(16.))
-                                        .line_height(px(22.4))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(c(WHITE))
-                                        .child("Lyrics preview"),
-                                )
-                                .child(div().mt(px(16.)).flex().flex_col().gap(px(14.4)).children(lines)),
-                        )
-                    })
+                    .when_some(lyrics, |d, l| d.child(self.npv_lyrics_card(l, window, cx)))
                     .children(sections)
                     .child(div().h(px(16.)).flex_none()),
             )

@@ -103,7 +103,7 @@ impl Shell {
         let vp = window.viewport_size();
         let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
         let track = self.playback.as_ref().and_then(|p| p.item.clone());
-        let bg = self.lyrics.as_ref().and_then(|l| l.1.as_ref()).map(|l| l.view_bg).unwrap_or(0x535353);
+        let bg = self.lyrics.as_ref().and_then(|l| l.1.as_ref()).map(|l| l.background).unwrap_or(0x535353);
         let art = track
             .as_ref()
             .and_then(|t| t.album.as_ref())

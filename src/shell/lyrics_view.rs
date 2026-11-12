@@ -3,7 +3,7 @@
 //! background = the lyrics' background colour (radius 8). Header 64px: the context name 16/700
 //! at x24, toolbar at the right (32px buttons, 16 from the edge). Lines: title font 48/700,
 //! line height 57.6, 28.8 apart, in a 740px column 64px in; the active line (white) is kept at
-//! the vertical centre and scrolls smoothly; passed lines are the active colour at 70%,
+//! the vertical centre and scrolls smoothly; passed lines are the inactive colour at 50%,
 //! upcoming ones the inactive colour; colour/opacity ease over 0.1s. Clicking a line seeks to it.
 
 use std::cell::RefCell;
@@ -41,7 +41,7 @@ impl Shell {
     }
 
     /// Index of the line playing at `ms` (synced lyrics).
-    fn active_line(timed: &[(u64, String)], ms: u64) -> Option<usize> {
+    pub(super) fn active_line(timed: &[(u64, String)], ms: u64) -> Option<usize> {
         let i = timed.partition_point(|(t, _)| *t <= ms);
         i.checked_sub(1)
     }
@@ -50,7 +50,8 @@ impl Shell {
         let lyr = self.lyrics.as_ref().and_then(|l| l.1.clone());
         let ctx_name = self.context_name.as_ref().map(|c| c.1.clone()).unwrap_or_default();
         let ctx_page = self.playback.as_ref().and_then(|p| p.context.as_ref()).and_then(|c| Page::for_uri(&c.uri));
-        let (bg, inactive, active) = lyr.as_ref().map(|l| (l.view_bg, l.view_text, l.view_active)).unwrap_or((0x535353, 0xFFFFFF, 0xFFFFFF));
+        // The client's --lyrics-color-*: the card's background and subdued text, active white.
+        let (bg, inactive, active) = lyr.as_ref().map(|l| (l.background, l.text, 0xFFFFFF)).unwrap_or((0x535353, 0xFFFFFF, 0xFFFFFF));
 
         let tool = |id: &'static str, path: &'static str, cx: &mut Context<Self>| {
             round_button(id, 32.).group(id).child(
@@ -163,8 +164,8 @@ impl Shell {
             let words = if words.is_empty() { "\u{266a}".to_string() } else { words.clone() };
             let (color, opacity) = match cur {
                 _ if !lyr.synced => (active, 1.),
-                // --lyrics-color-passed: the active text colour at 70%.
-                Some(c) if i < c => (active, 0.7),
+                // passed lines: the inactive colour at 50% (measured)
+                Some(c) if i < c => (inactive, 0.5),
                 Some(c) if i == c => (active, 1.),
                 _ => (inactive, 1.),
             };
