@@ -33,6 +33,7 @@ mod miniplayer;
 mod add_popover;
 mod search_view;
 mod like_fx;
+mod fx;
 
 use std::collections::{HashMap, HashSet};
 
@@ -78,7 +79,12 @@ pub struct Shell {
     home: Option<HomeFeed>,
     home_error: Option<String>,
     /// Header tint; follows the hovered shortcut like the real client.
-    home_color: u32,
+    /// Home tint transition (from, to, start); `HOME_PAGE_COLOR` means the page's own colour.
+    home_color: (u32, u32, std::time::Instant),
+    /// Shortcut under the pointer (its colour tints Home).
+    home_hovered: Option<usize>,
+    /// Opacity of the stuck chips header's colour layer.
+    home_hdr: std::cell::Cell<fx::Tween>,
     chip: usize,
     /// Screen bounds of the seek / volume tracks, recorded at paint time for click-to-set.
     seek_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -339,6 +345,10 @@ const RIGHT_MIN: f32 = 280.;
 const RIGHT_MAX: f32 = 420.;
 
 const HOME_DEFAULT_COLOR: u32 = 0x535353;
+/// Stands for Home's resting colour: the first shortcut's (measured: Liked Songs' #7860e8).
+const HOME_PAGE_COLOR: u32 = u32::MAX;
+/// Measured: `transition: background 1s` (ease).
+const HOME_TINT_SECS: f32 = 1.;
 /// Cache key for the Liked Songs page.
 const LIKED_URI: &str = "spotify:collection:tracks";
 const LIKED_SONGS_IMAGE: &str = "https://misc.scdn.co/liked-songs/liked-songs-300.png";
@@ -364,7 +374,9 @@ impl Shell {
             local_pending: None,
             home: None,
             home_error: None,
-            home_color: HOME_DEFAULT_COLOR,
+            home_color: (HOME_PAGE_COLOR, HOME_PAGE_COLOR, std::time::Instant::now()),
+            home_hovered: None,
+            home_hdr: std::cell::Cell::new(fx::Tween::new(0.)),
             chip: 0,
             seek_bounds: Rc::default(),
             volume_bounds: Rc::default(),
@@ -2285,9 +2297,14 @@ impl Shell {
             .on_hover({
                 let g = group.clone();
                 cx.listener(move |this, hovered: &bool, _, cx| {
-                    // Measured: the tint keeps the last hovered shortcut's colour after the pointer leaves.
+                    // Measured: the tint eases to the shortcut's colour (background 1s ease) and back to
+                    // the page's own colour when the pointer leaves.
                     if *hovered {
-                        this.home_color = color;
+                        this.home_hovered = Some(i);
+                        this.home_retarget(color);
+                    } else if this.home_hovered == Some(i) {
+                        this.home_hovered = None;
+                        this.home_retarget(HOME_PAGE_COLOR);
                     }
                     this.set_hovered(g.clone(), *hovered);
                     cx.notify();
@@ -2489,16 +2506,61 @@ impl Shell {
             .into_any_element()
     }
 
+    /// Home's resting colour: its first shortcut's.
+    fn home_page_color(&self) -> u32 {
+        self.home.as_ref().and_then(|f| f.shortcuts.first()).and_then(|i| i.color).unwrap_or(HOME_DEFAULT_COLOR)
+    }
+
+    /// The tint right now (0xRRGGBB), mid-transition included.
+    fn home_tint(&self) -> u32 {
+        let (a, b, at) = self.home_color;
+        let real = |v: u32| if v == HOME_PAGE_COLOR { self.home_page_color() } else { v };
+        let t = fx::Ease::Ease.at(at.elapsed().as_secs_f32() / HOME_TINT_SECS);
+        fx::mix_u32(real(a) << 8 | 0xFF, real(b) << 8 | 0xFF, t) >> 8
+    }
+
+    fn home_retarget(&mut self, to: u32) {
+        if self.home_color.1 == to {
+            return;
+        }
+        self.home_color = (self.home_tint(), to, std::time::Instant::now());
+    }
+
+    /// Whether Home's tint or header is mid-transition (the root then asks for another frame).
+    fn home_animating(&self) -> bool {
+        let (a, b, at) = self.home_color;
+        (a != b && at.elapsed().as_secs_f32() < HOME_TINT_SECS) || self.home_hdr.get().running()
+    }
+
     fn home_view(&self, main_w: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        let tint = self.home_color;
+        let tint = self.home_tint();
+        // Measured: the chips header is sticky; once it sticks (any scroll here) its colour layer
+        // (the tint under 60% black) fades in, opacity .4s ease-out, and back out at the top.
+        let stuck = self.page_scroll.offset().y < px(0.);
+        let mut hdr = self.home_hdr.get();
+        hdr.set(if stuck { 1. } else { 0. }, 0.4, fx::Ease::Out);
+        self.home_hdr.set(hdr);
+        let hdr_opacity = hdr.value();
         let mut body = div()
             .id("home-scroll")
+            .track_scroll(&self.page_scroll)
             .absolute()
             .inset_0()
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .pb(px(32.));
+            .pb(px(32.))
+            // The tinted band sits in the content, so it scrolls away.
+            .child(
+                div().absolute().top_0().left_0().right_0().h(px(256.)).bg(c(tint)).child(
+                    div().size_full().bg(linear_gradient(
+                        180.,
+                        linear_color_stop(rgba(0x00000099), 0.),
+                        linear_color_stop(c(SURFACE), 1.),
+                    )),
+                ),
+            );
+        let mut header = None;
 
         match &self.home {
             None => {
@@ -2529,9 +2591,8 @@ impl Shell {
                         .child(label.clone())
                         .into_any_element()
                 });
-                body = body.child(
-                    div().h(px(64.)).flex_none().pt(px(20.)).px(px(40.)).flex().flex_row().gap(px(8.)).children(chips),
-                );
+                header = Some(div().h(px(64.)).flex_none().pt(px(20.)).px(px(40.)).flex().flex_row().gap(px(8.)).children(chips));
+                body = body.child(div().h(px(64.)).flex_none());
 
                 // Shortcut grid, a container query on the section (content) width, from the
                 // reference CSS: 2 columns, 4 at >= 700; tiles 48 tall (gap 8), 64 at >= 1141,
@@ -2576,16 +2637,17 @@ impl Shell {
             .bg(c(SURFACE))
             .overflow_hidden()
             .relative()
-            .child(
-                div().absolute().top_0().left_0().right_0().h(px(256.)).bg(c(tint)).child(
-                    div().size_full().bg(linear_gradient(
-                        180.,
-                        linear_color_stop(rgba(0x00000099), 0.),
-                        linear_color_stop(c(SURFACE), 1.),
-                    )),
-                ),
-            )
             .child(body)
+            .children(header.map(|chips| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(64.))
+                    .child(div().absolute().inset_0().opacity(hdr_opacity).bg(fx::mix(tint << 8 | 0xFF, 0x000000FF, 0.6)))
+                    .child(chips)
+            }))
     }
 }
 
@@ -2853,7 +2915,7 @@ impl Render for Shell {
             self.open_miniplayer(window, cx);
         }
         self.refresh_mini_color(cx);
-        if self.fx_animating() || self.like_burst_animating() {
+        if self.fx_animating() || self.like_burst_animating() || self.home_animating() {
             window.request_animation_frame();
         }
         div()
