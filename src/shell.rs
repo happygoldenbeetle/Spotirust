@@ -35,6 +35,7 @@ mod search_view;
 mod like_fx;
 mod section_view;
 mod lib_find;
+mod lib_chips;
 mod fx;
 
 use std::collections::{HashMap, HashSet};
@@ -138,6 +139,10 @@ pub struct Shell {
     lib_menu: bool,
     /// Your Library's filter field.
     lib_find: lib_find::LibFind,
+    /// Your Library's picked filter chip, and the picked chip under it.
+    lib_chip: Option<lib_chips::Chip>,
+    lib_sub: Option<lib_chips::Sub>,
+    lib_chips_scroll: gpui::ScrollHandle,
     /// View-as highlight animation: index it slides from, and a counter that restarts it.
     lib_view_from: f32,
     lib_view_seq: usize,
@@ -425,6 +430,9 @@ impl Shell {
             // Debug: SPOTIRUST_LIBMENU=1 opens the library Sort/View menu (for captures).
             lib_menu: std::env::var_os("SPOTIRUST_LIBMENU").is_some(),
             lib_find: Default::default(),
+            lib_chip: None,
+            lib_sub: None,
+            lib_chips_scroll: gpui::ScrollHandle::new(),
             lib_view_from: library_view::LibPrefs::load().view_index(),
             lib_view_seq: 0,
             lib_hover: false,
@@ -1853,8 +1861,9 @@ impl Shell {
             return self.library_rail(cx);
         }
         let me_name = self.me.as_ref().and_then(|m| m.display_name.clone()).unwrap_or_default();
-        let mut items = self.library_items();
-        items.retain(|it| self.lib_find_matches(it));
+        let all = self.library_items();
+        let mut items = all.clone();
+        items.retain(|it| self.lib_find_matches(it) && self.lib_chip_matches(it, &me_name));
         library_view::sort_items(&mut items, self.lib_prefs);
         let rows = self.library_content(&items, &me_name, cx);
 
@@ -2011,31 +2020,7 @@ impl Shell {
                     ),
             )
             // filter chips at y 67.2
-            .child(
-                div()
-                    .mt(px(16.))
-                    .px(px(16.))
-                    .h(px(32.))
-                    .flex_none()
-                    .flex()
-                    .flex_row()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .id("chip-playlists")
-                            .h(px(32.))
-                            .px(px(12.))
-                            .flex()
-                            .items_center()
-                            .rounded_full()
-                            .bg(rgba(0xFFFFFF1A))
-                            .hover(|s| s.bg(rgba(0xFFFFFF24)))
-                            .cursor_pointer()
-                            .text_size(px(14.))
-                            .text_color(c(WHITE))
-                            .child("Playlists"),
-                    ),
-            )
+            .child(self.lib_chips_row(&all, &me_name, cx))
             // search + sort at y 109.2; the sort button ends 24 from the panel's right edge
             .child(
                 div()

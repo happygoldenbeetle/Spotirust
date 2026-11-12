@@ -185,7 +185,12 @@ impl Shell {
                             .whitespace_nowrap()
                             .text_size(px(TEXT))
                             .text_color(rgba(0xFFFFFFB3))
-                            .child(if has_text { SharedString::from(f.text.clone()) } else { "Search in Your Library".into() }),
+                            .child(if has_text {
+                                SharedString::from(f.text.clone())
+                            } else {
+                                // the picked chip names the field: "Search in Playlists"
+                                format!("Search in {}", self.lib_chip.map_or("Your Library", |ch| ch.label())).into()
+                            }),
                     )
                     .when(caret_on, |d| d.child(div().absolute().left(px(text_w - scroll)).top(px(8.)).w(px(1.)).h(px(16.)).bg(c(WHITE)))),
             )
