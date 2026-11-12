@@ -1,8 +1,8 @@
 //! Player bar, measured and read from the reference client (`dwp-now-playing-bar` and the
 //! player-controls chunk). Icon buttons behave like Encore tertiary buttons:
 //!   rest #b3b3b3 (right-hand icons rgba(255,255,255,.7)) -> hover white and scale 1.04,
-//!   `transition: color .15s, transform .15s` cubic-bezier(.3,0,0,1) both ways (measured on every
-//!   control); the scale is a transform, so the button's box and hit area never change.
+//!   `transition: color .15s, transform .15s` cubic-bezier(.3,0,0,1), .05s while hovered (measured
+//!   on every control); the scale is a transform, so the button's box and hit area never change.
 //!   Pressed: opacity .7, scale 1.
 //!   On (shuffle / repeat): #1ed760 with a 4px dot underneath. Toggled panels (queue / connect /
 //!   lyrics): #1db954 -> #1ed760 on hover, with the dot.
@@ -17,7 +17,6 @@ use gpui::{ClickEvent, ScrollDelta, ScrollWheelEvent};
 
 use super::*;
 
-const HOVER: f32 = 0.15;
 const TIP_DELAY: Duration = Duration::from_millis(200);
 
 /// Hover / press state of the bar's buttons (drives the Encore hover animation and tooltips).
@@ -30,12 +29,7 @@ pub struct BarFx {
 /// Bounds + tooltip text of each control, recorded while painting (anchors the tooltip).
 pub type TipAnchors = Rc<RefCell<HashMap<&'static str, (Bounds<Pixels>, SharedString)>>>;
 
-use super::fx::mix;
-
-/// An icon scaled by `s` as a transform (around its centre; layout stays `size`).
-fn scaled_icon(path: &'static str, size: f32, s: f32) -> gpui::Svg {
-    svg().path(path).size(px(size)).with_transformation(gpui::Transformation::scale(gpui::size(s, s)))
-}
+use super::fx::{TERTIARY, mix, scaled_icon};
 
 #[derive(Clone, Copy)]
 pub enum Look {
@@ -73,11 +67,11 @@ impl Shell {
 
     pub(super) fn bar_hovered(&mut self, id: &'static str, on: bool, cx: &mut Context<Self>) {
         let now = Instant::now();
-        self.fades.hover(id.into(), on, HOVER, super::fx::Ease::Productive);
+        self.fades.hover(id.into(), on, if on { TERTIARY.enter } else { TERTIARY.leave }, TERTIARY.ease);
         if on {
             if self.bar_fx.hover.map(|h| h.0) != Some(id) {
                 if let Some((prev, _)) = self.bar_fx.hover {
-                    self.fades.hover(prev.into(), false, HOVER, super::fx::Ease::Productive);
+                    self.fades.hover(prev.into(), false, TERTIARY.leave, TERTIARY.ease);
                 }
                 self.bar_fx.hover = Some((id, now));
                 cx.spawn(async move |this, cx| {

@@ -593,6 +593,8 @@ impl Shell {
         let caret_x = text_width(window, &s.text[..s.caret], 16., font) - scroll_x;
         let caret_on = focused && !s.all && (s.edit_at.elapsed().as_millis() / 530) % 2 == 0;
         let fade = || Animation::new(Duration::from_millis(220)).with_easing(ease_in);
+        let hover_t = self.fades.get("search");
+        let icon_s = if self.fades.on("search-icon") { 1.04 } else { 1. };
 
         // 2px inset ring: fades in with focus and out without it.
         let ring = div().absolute().inset_0().rounded_full().border_2().border_color(c(WHITE));
@@ -660,9 +662,15 @@ impl Shell {
             .w(px(BOX_W))
             .h(px(48.))
             .rounded_full()
-            .bg(c(if focused { 0x2A2A2A } else { ELEVATED }))
-            .hover(|s| s.bg(c(0x2A2A2A)))
+            // measured: background, box-shadow (1px inset rgba(255,255,255,.1)), color .22s ease-in
+            .bg(if focused { c(0x2A2A2A) } else { super::fx::mix(0x1F1F1FFF, 0x2A2A2AFF, hover_t) })
+            .child(div().absolute().inset_0().rounded_full().border_1().border_color(super::fx::mix(0xFFFFFF00, 0xFFFFFF1A, hover_t)))
             .cursor(CursorStyle::IBeam)
+            .on_hover(cx.listener(|this, h: &bool, _, cx| {
+                let tr = super::fx::SEARCH;
+                this.fades.hover("search".into(), *h, if *h { tr.enter } else { tr.leave }, tr.ease);
+                cx.notify();
+            }))
             .child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().inset_0())
             .on_mouse_down(
                 MouseButton::Left,
@@ -690,11 +698,17 @@ impl Shell {
                 }
             }))
             .child(
-                div()
-                    .absolute()
-                    .left(px(12.))
-                    .top(px(12.))
-                    .child(icon("icons/search.svg", 24., if focused { WHITE } else { TEXT_SUBDUED })),
+                // measured: white while the field is hovered or focused (color .22s ease-in); the
+                // icon itself scales 1.04 under the pointer
+                self.on_fade(
+                    div().id("search-icon").absolute().left(px(12.)).top(px(12.)).size(px(24.)).child(
+                        super::fx::scaled_icon("icons/search.svg", 24., icon_s)
+                            .text_color(if focused { c(WHITE) } else { super::fx::mix(0xB3B3B3FF, 0xFFFFFFFF, hover_t) }),
+                    ),
+                    "search-icon",
+                    super::fx::INSTANT,
+                    cx,
+                ),
             )
             .child(
                 div()
@@ -742,10 +756,18 @@ impl Shell {
                         this.blur_search(cx);
                         this.open(Page::Browse, cx);
                     }))
-                    .child(if self.page == Page::Browse {
-                        icon("icons/browse_filled.svg", 24., WHITE).into_any_element()
-                    } else {
-                        svg().path("icons/browse.svg").size(px(24.)).text_color(c(TEXT_SUBDUED)).hover(|s| s.text_color(c(WHITE))).into_any_element()
+                    .on_hover(cx.listener(|this, h: &bool, _, cx| {
+                        let tr = super::fx::TERTIARY;
+                        this.fades.hover("browse-button".into(), *h, if *h { tr.enter } else { tr.leave }, tr.ease);
+                        cx.notify();
+                    }))
+                    .child({
+                        let t = self.fades.get("browse-button");
+                        if self.page == Page::Browse {
+                            super::fx::scaled_icon("icons/browse_filled.svg", 24., 1. + 0.04 * t).text_color(c(WHITE))
+                        } else {
+                            super::fx::scaled_icon("icons/browse.svg", 24., 1. + 0.04 * t).text_color(super::fx::mix(0xB3B3B3FF, 0xFFFFFFFF, t))
+                        }
                     }),
             )
     }

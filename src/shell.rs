@@ -1615,9 +1615,20 @@ impl Shell {
             .me
             .as_ref()
             .and_then(|m| api::pick_image(&m.images, 64).map(|i| i.url.clone()));
+        let user_s = if self.fades.on("user") { 1.04 } else { 1. };
+        let (a_d, a_off) = (32. * user_s, (48. - 32. * user_s) / 2.);
         let avatar = match avatar_url.and_then(|u| images::cache(cx).update(cx, |c, cx| c.get(&u, cx))) {
-            Some(image) => img(ImageSource::Render(image)).size(px(32.)).rounded_full().into_any_element(),
-            None => div().size(px(32.)).rounded_full().bg(c(0x535353)).into_any_element(),
+            Some(image) => img(ImageSource::Render(image)).absolute().left(px(a_off)).top(px(a_off)).size(px(a_d)).rounded_full().into_any_element(),
+            None => div().absolute().left(px(a_off)).top(px(a_off)).size(px(a_d)).rounded_full().bg(c(0x535353)).into_any_element(),
+        };
+        // Encore tertiary icon (back / forward / bell / friends): subdued -> white and 1.04.
+        let tert = |id: &str, path: &'static str, size: f32, enabled: bool| {
+            let t = if enabled { self.fades.get(id) } else { 0. };
+            fx::scaled_icon(path, size, 1. + 0.04 * t).text_color(fx::mix(0xB3B3B3FF, 0xFFFFFFFF, t))
+        };
+        // A round button's fill drawn as a child, so its 1.04 scale leaves the box alone.
+        let round_fill = |d: f32, s: f32, color: gpui::Rgba| {
+            div().absolute().left(px((d - d * s) / 2.)).top(px((d - d * s) / 2.)).size(px(d * s)).rounded_full().bg(color)
         };
 
         div()
@@ -1637,7 +1648,7 @@ impl Shell {
                     .child(icon("icons/more.svg", 16., WHITE)),
             )
             // back / forward
-            .child(
+            .child(self.on_fade(
                 div()
                     .id("back")
                     .occlude()
@@ -1652,9 +1663,12 @@ impl Shell {
                     .justify_center()
                     // measured: 24px icon, opacity .3 while there's nowhere to go
                     .when(self.back.is_empty(), |d| d.opacity(0.3))
-                    .child(icon("icons/back.svg", 24., TEXT_SUBDUED)),
-            )
-            .child(
+                    .child(tert("back", "icons/back.svg", 24., !self.back.is_empty())),
+                "back",
+                fx::TERTIARY,
+                cx,
+            ))
+            .child(self.on_fade(
                 div()
                     .id("forward")
                     .occlude()
@@ -1669,8 +1683,11 @@ impl Shell {
                     .justify_center()
                     // measured: 24px icon, opacity .3 while there's nowhere to go
                     .when(self.forward.is_empty(), |d| d.opacity(0.3))
-                    .child(icon("icons/forward.svg", 24., TEXT_SUBDUED)),
-            )
+                    .child(tert("forward", "icons/forward.svg", 24., !self.forward.is_empty())),
+                "forward",
+                fx::TERTIARY,
+                cx,
+            ))
             // home + search, centered in the window
             .child(
                 div()
@@ -1685,18 +1702,26 @@ impl Shell {
                             .flex()
                             .flex_row()
                             .gap(px(8.))
-                            .child(
-                                round_button("home-button", 48.)
-                                    .occlude()
-                                    .bg(c(ELEVATED))
-                                    .hover(|s| s.bg(c(0x2A2A2A)))
-                                    .on_click(cx.listener(|this, _, _, cx| this.open(Page::Home, cx)))
-                                    .child(if self.page == Page::Home {
-                                        icon("icons/home_filled.svg", 24., WHITE).into_any_element()
-                                    } else {
-                                        icon("icons/home.svg", 24., TEXT_SUBDUED).into_any_element()
-                                    }),
-                            )
+                            .child({
+                                // measured: background-color, color .2s ease-in-out; scale 1.04 at once
+                                let t = self.fades.get("home-button");
+                                let s = if self.fades.on("home-button") { 1.04 } else { 1. };
+                                let home = self.page == Page::Home;
+                                self.on_fade(
+                                    round_button("home-button", 48.)
+                                        .occlude()
+                                        .relative()
+                                        .on_click(cx.listener(|this, _, _, cx| this.open(Page::Home, cx)))
+                                        .child(round_fill(48., s, fx::mix(0x1F1F1FFF, 0x2A2A2AFF, t)))
+                                        .child(
+                                            fx::scaled_icon(if home { "icons/home_filled.svg" } else { "icons/home.svg" }, 24., s)
+                                                .text_color(if home { c(WHITE) } else { fx::mix(0xB3B3B3FF, 0xFFFFFFFF, t) }),
+                                        ),
+                                    "home-button",
+                                    fx::ROUND_BG,
+                                    cx,
+                                )
+                            })
                             .child(self.search_box(window, cx)),
                     ),
             )
@@ -1711,20 +1736,37 @@ impl Shell {
                     .flex_row()
                     .items_center()
                     .gap(px(8.))
-                    .child(round_button("whats-new", 32.).occlude().child(icon("icons/bell.svg", 16., TEXT_SUBDUED)))
-                    .child(round_button("friends", 32.)
+                    .child(self.on_fade(
+                        round_button("whats-new", 32.).occlude().child(tert("whats-new", "icons/bell.svg", 16., true)),
+                        "whats-new",
+                        fx::TERTIARY,
+                        cx,
+                    ))
+                    .child(self.on_fade(
+                        round_button("friends", 32.)
                             .occlude()
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_friends(cx)))
                             .child(if self.right_panel == RightPanel::Friends {
-                                icon("icons/friends_active.svg", 16., WHITE).into_any_element()
+                                let t = self.fades.get("friends");
+                                fx::scaled_icon("icons/friends_active.svg", 16., 1. + 0.04 * t).text_color(c(WHITE)).into_any_element()
                             } else {
-                                icon("icons/friends.svg", 16., TEXT_SUBDUED).into_any_element()
-                            }))
-                    .child(round_button("user", 48.)
+                                tert("friends", "icons/friends.svg", 16., true).into_any_element()
+                            }),
+                        "friends",
+                        fx::TERTIARY,
+                        cx,
+                    ))
+                    .child(self.on_fade(
+                        round_button("user", 48.)
                             .occlude()
-                            .bg(c(ELEVATED))
+                            .relative()
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_profile_menu(cx)))
-                            .child(avatar)),
+                            .child(round_fill(48., user_s, fx::mix(0x1F1F1FFF, 0x2A2A2AFF, self.fades.get("user"))))
+                            .child(avatar),
+                        "user",
+                        fx::ROUND_BG,
+                        cx,
+                    )),
             )
             .child(crate::titlebar::caption_buttons())
     }
@@ -1787,9 +1829,11 @@ impl Shell {
         if cms < 200. {
             window.request_animation_frame();
         }
+        let create_t = self.fades.get("create");
         let plus = || {
             let g = 0xB3 as f32 / 255.;
-            let v = g + (1. - g) * cp;
+            // measured: the + turns white at once on hover (its color isn't transitioned)
+            let v = if self.fades.on("create") { 1. } else { g + (1. - g) * cp };
             svg()
                 .path("icons/plus.svg")
                 .size(px(16.))
@@ -1871,8 +1915,7 @@ impl Shell {
                             .items_center()
                             .gap(px(8.))
                             .rounded_full()
-                            .bg(c(ELEVATED))
-                            .hover(|s| s.bg(c(0x2A2A2A)))
+                            .bg(fx::mix(0x1F1F1FFF, 0x2A2A2AFF, create_t))
                             .cursor_pointer()
                             .child(plus())
                             .child(
@@ -1885,10 +1928,14 @@ impl Shell {
                             )
                     } else {
                         round_button("create", 35.)
-                            .bg(c(ELEVATED))
-                            .hover(|s| s.bg(c(0x2A2A2A)))
+                            .bg(fx::mix(0x1F1F1FFF, 0x2A2A2AFF, create_t))
                             .child(plus())
                     })
+                    .on_hover(cx.listener(|this, h: &bool, _, cx| {
+                        let tr = fx::CREATE_BG;
+                        this.fades.hover("create".into(), *h, if *h { tr.enter } else { tr.leave }, tr.ease);
+                        cx.notify();
+                    }))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if !this.create_open && this.menu_closed_at.elapsed().as_millis() < 400 {
                             return;
@@ -1900,17 +1947,21 @@ impl Shell {
                         cx.notify();
                     })))
                     .child(
-                        round_button("expand-library", 35.)
-                            .h(px(35.2))
-                            .ml(px(8.))
-                            .group("expand-library")
-                            .child(
-                                svg()
-                                    .path("icons/expand.svg")
-                                    .size(px(16.))
-                                    .text_color(c(TEXT_SUBDUED))
-                                    .group_hover("expand-library", |s| s.text_color(c(WHITE))),
-                            ),
+                        self.on_fade(
+                            round_button("expand-library", 35.)
+                                .h(px(35.2))
+                                .ml(px(8.))
+                                .hover(|s| s.bg(c(ELEVATED)))
+                                .child(
+                                    svg()
+                                        .path("icons/expand.svg")
+                                        .size(px(16.))
+                                        .text_color(fx::mix(0xB3B3B3FF, 0xFFFFFFFF, self.fades.get("expand-library"))),
+                                ),
+                            "expand-library",
+                            fx::EXPAND,
+                            cx,
+                        ),
                     ),
             )
             // filter chips at y 67.2
@@ -1963,10 +2014,9 @@ impl Shell {
                             ),
                     )
                     .child(div().flex_1())
-                    .child(
+                    .child(self.on_fade(
                         div()
                             .id("sort")
-                            .group("sort")
                             .h(px(32.))
                             .flex()
                             .flex_row()
@@ -1975,8 +2025,7 @@ impl Shell {
                             .cursor_pointer()
                             .text_size(px(14.))
                             .line_height(px(19.2))
-                            .text_color(c(TEXT_SUBDUED))
-                            .hover(|s| s.text_color(c(WHITE)))
+                            .text_color(fx::mix(0xB3B3B3FF, 0xFFFFFFFF, self.fades.get("sort")))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if !this.lib_menu && this.menu_closed_at.elapsed().as_millis() < 400 {
                                     return;
@@ -1989,13 +2038,13 @@ impl Shell {
                             }))
                             .child(self.lib_prefs.sort.label())
                             .child(
-                                svg()
-                                    .path(self.lib_prefs.view.icon())
-                                    .size(px(16.))
-                                    .text_color(c(TEXT_SUBDUED))
-                                    .group_hover("sort", |s| s.text_color(c(WHITE))),
+                                fx::scaled_icon(self.lib_prefs.view.icon(), 16., 1. + 0.04 * self.fades.get("sort"))
+                                    .text_color(fx::mix(0xB3B3B3FF, 0xFFFFFFFF, self.fades.get("sort"))),
                             ),
-                    ),
+                        "sort",
+                        fx::TERTIARY,
+                        cx,
+                    )),
             )
             // rows from y 149.2
             .child(

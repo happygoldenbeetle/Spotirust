@@ -130,3 +130,47 @@ impl Fades {
         m.values().any(|t| t.running())
     }
 }
+
+impl Fades {
+    /// Whether `id` is heading to hovered (the pointer is on it).
+    pub fn on(&self, id: &str) -> bool {
+        self.0.borrow().get(id).is_some_and(|t| t.to == 1.)
+    }
+}
+
+/// A measured CSS transition: duration entering hover, leaving it, and the curve.
+#[derive(Clone, Copy)]
+pub struct Trans {
+    pub enter: f32,
+    pub leave: f32,
+    pub ease: Ease,
+}
+
+/// Encore tertiary buttons: `color .15s, transform .15s` productive, `.05s` while hovered.
+pub const TERTIARY: Trans = Trans { enter: 0.05, leave: 0.15, ease: Ease::Productive };
+/// The search field: `background, box-shadow, color .22s ease-in`.
+pub const SEARCH: Trans = Trans { enter: 0.22, leave: 0.22, ease: Ease::In };
+/// Home and avatar buttons: `background-color .2s ease-in-out` (their 1.04 scale isn't transitioned).
+pub const ROUND_BG: Trans = Trans { enter: 0.2, leave: 0.2, ease: Ease::InOut };
+/// Create: `background-color .2s ease-out`.
+pub const CREATE_BG: Trans = Trans { enter: 0.2, leave: 0.2, ease: Ease::Out };
+/// Expand Your Library: `color .2s linear`.
+pub const EXPAND: Trans = Trans { enter: 0.2, leave: 0.2, ease: Ease::Linear };
+/// No transition (hover state only).
+pub const INSTANT: Trans = Trans { enter: 0., leave: 0., ease: Ease::Linear };
+
+/// An icon scaled by `s` as a transform (around its centre; its box stays `size`).
+pub fn scaled_icon(path: &'static str, size: f32, s: f32) -> gpui::Svg {
+    use gpui::Styled;
+    gpui::svg().path(path).size(gpui::px(size)).with_transformation(gpui::Transformation::scale(gpui::size(s, s)))
+}
+
+impl super::Shell {
+    /// Wires `el`'s hover into the fade `id` (read it back with `self.fades.get(id)`).
+    pub(super) fn on_fade<E: gpui::StatefulInteractiveElement>(&self, el: E, id: &'static str, tr: Trans, cx: &mut gpui::Context<Self>) -> E {
+        el.on_hover(cx.listener(move |this, h: &bool, _, cx| {
+            this.fades.hover(id.into(), *h, if *h { tr.enter } else { tr.leave }, tr.ease);
+            cx.notify();
+        }))
+    }
+}
