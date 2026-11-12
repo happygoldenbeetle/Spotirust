@@ -759,18 +759,23 @@ impl Shell {
 
     /// Right-click handler for a tracklist row in `context` (playlist / album / Liked Songs).
     pub(super) fn track_ctx_listener(&self, t: &crate::playlist::Track, context: &str, cx: &mut Context<Self>) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
-        let target = Target::Track {
+        let target = self.track_target(t, context);
+        cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+            cx.stop_propagation();
+            this.open_ctx_menu(target.clone(), ev.position, false, cx);
+        })
+    }
+
+    /// The menu target of a tracklist row (`context`: the playlist / album it's listed in, or "").
+    pub(super) fn track_target(&self, t: &crate::playlist::Track, context: &str) -> Target {
+        Target::Track {
             uri: t.uri.clone(),
             name: t.name.clone(),
             album_uri: t.album_uri.clone(),
             artists: t.artists.iter().map(|(n, u)| (n.clone(), u.clone())).collect(),
             editable_playlist: (context.contains(":playlist:") && self.playlist_pages.get(context).is_some_and(|p| p.can_edit)).then(|| context.to_string()),
             on_album: context.contains(":album:"),
-        };
-        cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-            cx.stop_propagation();
-            this.open_ctx_menu(target.clone(), ev.position, false, cx);
-        })
+        }
     }
 
     /// Right-click on empty space in Your Library.

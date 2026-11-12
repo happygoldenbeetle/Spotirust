@@ -166,12 +166,16 @@ impl Shell {
             .as_ref()
             .and_then(|a| api::pick_image(&a.images, 48).map(|i| images::variant(&i.url, images::Variant::Small)));
         let uri = t.uri.clone();
-        let ctx_uri = self.playback.as_ref().and_then(|p| p.context.as_ref()).map(|c| c.uri.clone());
+        // Queue rows play from their place in the playing context; Recently played rows (and rows
+        // with no context) from their album.
+        let album_uri = t.album.as_ref().map(|a| a.uri.clone()).filter(|u| !u.is_empty());
+        let ctx_uri = if self.queue_tab == 0 { self.playback.as_ref().and_then(|p| p.context.as_ref()).map(|c| c.uri.clone()) } else { None }
+            .or(album_uri);
         let target = ctx_menu::Target::Track {
             uri: t.uri.clone(),
             name: t.name.clone(),
             album_uri: t.album.as_ref().map(|a| a.uri.clone()).unwrap_or_default(),
-            artists: t.artists.iter().map(|a| (a.uri.clone(), a.name.clone())).collect(),
+            artists: t.artists.iter().map(|a| (a.name.clone(), a.uri.clone())).collect(),
             editable_playlist: None,
             on_album: false,
         };
@@ -211,9 +215,8 @@ impl Shell {
             .items_center()
             .on_click(cx.listener(move |this, _, _, cx| {
                 // Clicking a row plays it (from its place in the context when there is one).
-                match ctx_uri.clone() {
-                    Some(c) => this.player(Play::ContextAt(c, uri.clone()), cx),
-                    None => this.player(Play::Context(uri.clone()), cx),
+                if let Some(c) = ctx_uri.clone() {
+                    this.player(Play::ContextAt(c, uri.clone()), cx);
                 }
             }))
             .child(

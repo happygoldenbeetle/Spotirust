@@ -46,9 +46,15 @@ impl Shell {
     }
 
     pub(super) fn create_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.create_open || self.left_collapsed {
+        if !self.create_open {
             return None;
         }
+        // Under the Create button; on the collapsed rail, under its + (rail top 64 + 16 + 40 + 8).
+        let (top, left) = if self.left_collapsed {
+            (64. + 16. + 40. + 8. + 35. + 8., 8. + (LEFT_RAIL - 35.) / 2.)
+        } else {
+            (64. + 16. + 35.2 + 8., self.create_button_left())
+        };
         let mut animating = false;
         let mut items: Vec<AnyElement> = Vec::new();
         for (i, (icon_path, title, desc, beta)) in ITEMS.iter().enumerate() {
@@ -165,8 +171,8 @@ impl Shell {
             div()
                 .id("create-menu")
                 .absolute()
-                .top(px(64. + 16. + 35.2 + 8.))
-                .left(px(self.create_button_left()))
+                .top(px(top))
+                .left(px(left))
                 .occlude()
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     if this.create_open {

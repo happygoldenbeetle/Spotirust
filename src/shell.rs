@@ -57,6 +57,11 @@ const PLACEHOLDER: u32 = 0x282828;
 const TRACK: u32 = 0x4D4D4D;
 const ICON_DIM: u32 = 0xFFFFFFB3; // rgba(255,255,255,.7)
 
+/// Emitted when the user logs out (the window goes back to the login screen).
+pub struct LoggedOut;
+
+impl gpui::EventEmitter<LoggedOut> for Shell {}
+
 pub struct Shell {
     api: Option<Arc<Api>>,
     me: Option<Me>,
@@ -1186,6 +1191,16 @@ impl Shell {
         .detach();
     }
 
+    /// Log out: stops this app's own playback, forgets the saved sign-in and hands the window back
+    /// to the login screen (other devices keep playing, as with the client).
+    fn log_out(&mut self, cx: &mut Context<Self>) {
+        if let Some(local) = self.local.as_ref() {
+            let _ = local.pause();
+        }
+        crate::auth::clear_token();
+        cx.emit(LoggedOut);
+    }
+
     /// Opens a page, like clicking a link in the client (pushes history).
     fn open(&mut self, page: Page, cx: &mut Context<Self>) {
         if page == self.page {
@@ -1369,15 +1384,33 @@ impl Shell {
         .detach();
     }
 
+    /// The context a card plays (Liked Songs is the user's collection).
+    fn item_context(&self, item: &Item) -> Option<String> {
+        match item.kind {
+            Kind::LikedSongs => self.me.as_ref().map(|me| format!("spotify:user:{}:collection", me.id)),
+            Kind::Playlist | Kind::Album | Kind::Artist => Some(item.uri.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether `item`'s context is the one playing (Liked Songs matches either collection URI).
+    fn item_playing_here(&self, item: &Item) -> bool {
+        let Some(ctx) = self.playback.as_ref().and_then(|p| p.context.as_ref()).map(|c| c.uri.as_str()) else { return false };
+        match item.kind {
+            Kind::LikedSongs => ctx.ends_with(":collection") || ctx == "spotify:collection:tracks",
+            _ => self.item_context(item).is_some_and(|u| u == ctx),
+        }
+    }
+
+    /// The card's green button: pauses / resumes its context when it's the one playing, else
+    /// plays it.
     fn play_item(&mut self, item: &Item, cx: &mut Context<Self>) {
-        let uri = match item.kind {
-            Kind::LikedSongs => match &self.me {
-                Some(me) => format!("spotify:user:{}:collection", me.id),
-                None => return,
-            },
-            _ => item.uri.clone(),
-        };
-        self.player(Play::Context(uri.clone()), cx);
+        if self.item_playing_here(item) {
+            self.toggle_play(cx);
+            return;
+        }
+        let Some(uri) = self.item_context(item) else { return };
+        self.player(Play::Context(uri), cx);
     }
 
     fn select_chip(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -2118,6 +2151,16 @@ impl Shell {
                     .mt(px(8.))
                     .bg(c(ELEVATED))
                     .hover(|s| s.bg(c(0x2A2A2A)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.create_open && this.menu_closed_at.elapsed().as_millis() < 400 {
+                            return;
+                        }
+                        this.create_open = !this.create_open;
+                        this.create_toggled_at = std::time::Instant::now();
+                        this.create_hover = None;
+                        this.create_unhover = None;
+                        cx.notify();
+                    }))
                     .child(icon("icons/plus.svg", 16., TEXT_SUBDUED)),
             )
             .child(
@@ -2324,7 +2367,6 @@ fn green_play(size: f32) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .child(icon("icons/play.svg", size * 0.42, 0x000000))
 }
 
 impl Shell {
@@ -2397,11 +2439,32 @@ impl Shell {
     /// Green play button that fades (and for cards, slides up 8px) in when its tile is hovered,
     /// matching the reference: 0.15s, cubic-bezier(0.3, 0, 0, 1).
     fn hover_play(&self, group: &SharedString, size: f32, slide: bool, item: &Item, cx: &mut Context<Self>) -> AnyElement {
-        if self.hovered.as_ref() != Some(group) || matches!(item.kind, Kind::User | Kind::Author) {
+        if self.item_context(item).is_none() {
+            return div().into_any_element();
+        }
+        // The playing card keeps its button (a pause) showing; the rest show play on hover.
+        let playing = self.item_playing_here(item) && self.playback.as_ref().is_some_and(|p| p.is_playing);
+        let hovered = self.hovered.as_ref() == Some(group);
+        if !hovered && !playing {
             return div().into_any_element();
         }
         let it = item.clone();
-        let button = green_play(size)
+        let button = if playing {
+            green_play(size).child(icon("icons/pause.svg", size * 0.42, 0x000000))
+        } else {
+            green_play(size).child(icon("icons/play.svg", size * 0.42, 0x000000))
+        };
+        if !hovered {
+            // Resting on the playing card: no entrance animation.
+            let b = button
+                .id(gpui::ElementId::Name(format!("{group}-play").into()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.play_item(&it, cx);
+                }));
+            return if slide { b.absolute().right(px(8.)).bottom(px(8.)).into_any_element() } else { b.into_any_element() };
+        }
+        let button = button
             .id(gpui::ElementId::Name(format!("{group}-play").into()))
             .hover(|s| s.bg(c(GREEN_HOVER)))
             .on_click(cx.listener(move |this, _, _, cx| {

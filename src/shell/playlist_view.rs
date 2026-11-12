@@ -230,9 +230,14 @@ impl Shell {
             }))
             .child(icon(if is_playing { "icons/pause24.svg" } else { "icons/play24.svg" }, 24., 0x000000));
         let explore = page.tracks.first().and_then(|t| t.image.as_deref()).map(|u| images::variant(u, images::Variant::Small));
-        let bar_icon = move |id: &'static str, path: &'static str| {
+        // Encore tertiary: subdued -> white and 1.04 (.05s in / .15s out); `on`: green + a dot.
+        let fades = &self.fades;
+        let bar_icon = move |id: &'static str, path: &'static str, on: bool, dot: bool| {
+            let t = fades.get(id);
+            let color = if on { fx::mix(0x1ED760FF, 0x3BE477FF, t) } else { fx::mix(0xB3B3B3FF, 0xFFFFFFFF, t) };
             div()
                 .id(id)
+                .relative()
                 .w(px(icon_size))
                 .h(px(play_size))
                 .flex_none()
@@ -240,9 +245,22 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .child(icon(path, icon_size, TEXT_SUBDUED))
+                .child(fx::scaled_icon(path, icon_size, 1. + 0.04 * t).text_color(color))
+                .when(dot, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .bottom(px((play_size - icon_size) / 2. - 8.))
+                            .left(px(icon_size / 2. - 2.))
+                            .size(px(4.))
+                            .rounded_full()
+                            .bg(color),
+                    )
+                })
         };
         let shuffle_on = self.playback.as_ref().is_some_and(|p| p.shuffle_state) && playing_here;
+        let saved = album && self.in_library(&page.uri);
+        let (menu_uri, menu_name) = (page.uri.clone(), page.name.clone());
         let action_bar = div()
             .flex_none()
             .h(px(play_size))
@@ -268,13 +286,47 @@ impl Shell {
                         ),
                 )
             })
-            .child(bar_icon("pl-shuffle", "icons/pl_shuffle24.svg").when(shuffle_on, |d| {
-                d.child(div())
-            }))
-            .when(album, |d| d.child(bar_icon("pl-save", "icons/add_circle24.svg")))
-            .child(bar_icon("pl-download", "icons/pl_download24.svg"))
-            .when(page.can_edit, |d| d.child(bar_icon("pl-invite", "icons/pl_adduser24.svg")))
-            .when(!liked, |d| d.child(bar_icon("pl-more", "icons/pl_more24.svg")))
+            .child(self.on_fade(
+                bar_icon("pl-shuffle", "icons/pl_shuffle24.svg", shuffle_on, shuffle_on).on_click({
+                    let uri = page.uri.clone();
+                    cx.listener(move |this, _, _, cx| {
+                        if playing_here {
+                            this.player(Play::Shuffle(!shuffle_on), cx);
+                        } else {
+                            // Not playing here: start it shuffled.
+                            this.player(Play::Shuffle(true), cx);
+                            this.player(Play::Context(uri.clone()), cx);
+                        }
+                    })
+                }),
+                "pl-shuffle",
+                fx::TERTIARY,
+                cx,
+            ))
+            .when(album, |d| {
+                let uri = page.uri.clone();
+                d.child(self.on_fade(
+                    bar_icon("pl-save", if saved { "icons/check_circle24.svg" } else { "icons/add_circle24.svg" }, saved, false)
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_hit_saved(uri.clone(), !saved, cx))),
+                    "pl-save",
+                    fx::TERTIARY,
+                    cx,
+                ))
+            })
+            .child(self.on_fade(bar_icon("pl-download", "icons/pl_download24.svg", false, false), "pl-download", fx::TERTIARY, cx))
+            .when(page.can_edit, |d| d.child(self.on_fade(bar_icon("pl-invite", "icons/pl_adduser24.svg", false, false), "pl-invite", fx::TERTIARY, cx)))
+            .when(!liked, |d| {
+                d.child(self.on_fade(
+                    bar_icon("pl-more", "icons/pl_more24.svg", false, false).on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                        if let Some(t) = this.target_for(&menu_uri, &menu_name) {
+                            this.open_ctx_menu(t, ev.position(), false, cx);
+                        }
+                    })),
+                    "pl-more",
+                    fx::TERTIARY,
+                    cx,
+                ))
+            })
             .child(div().flex_1())
             .when(!album, |d| d.child(
                 div()
@@ -710,6 +762,7 @@ impl Shell {
         let group: SharedString = format!("pl-row-{i}").into();
         // Rows outside a playlist or album (search results) play from the song's album.
         let from_search = context.is_empty();
+        let menu_target = self.track_target(t, context);
         let context = if from_search { t.album_uri.as_str() } else { context };
         let artists = t.artists.iter().map(|a| a.0.as_str()).collect::<Vec<_>>().join(", ");
         let title_color = if playing { GREEN } else { WHITE };
@@ -719,7 +772,13 @@ impl Shell {
         let (ctx, track) = (context.to_string(), t.uri.clone());
         let mut row = div()
             .id(gpui::ElementId::Name(group.clone()))
-            .on_mouse_down(MouseButton::Right, self.track_ctx_listener(t, context, cx))
+            .on_mouse_down(MouseButton::Right, {
+                let target = menu_target.clone();
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_ctx_menu(target.clone(), ev.position, false, cx);
+                })
+            })
             .group(group.clone())
             .h(px(ROW_H))
             .px(px(16.))
@@ -754,15 +813,22 @@ impl Shell {
                             .group_hover(group.clone(), |s| s.opacity(0.))
                             .child(format!("{}", if t.number > 0 { t.number as usize } else { i + 1 })),
                     )
-                    .child(
+                    .child({
+                        let (ctx, track) = (context.to_string(), t.uri.clone());
                         div()
+                            .id(gpui::ElementId::Name(format!("{group}-play").into()))
                             .absolute()
                             .top(px(3.2))
                             .left_0()
+                            .cursor_pointer()
                             .opacity(0.)
                             .group_hover(group.clone(), |s| s.opacity(1.))
-                            .child(icon("icons/pl_play24b.svg", 16., WHITE)),
-                    ),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.player(Play::ContextAt(ctx.clone(), track.clone()), cx);
+                            }))
+                            .child(icon("icons/pl_play24b.svg", 16., WHITE))
+                    }),
             )
             // title + artists
             .child(
@@ -923,13 +989,19 @@ impl Shell {
                 )
                 .child(
                     div()
+                        .id(gpui::ElementId::Name(format!("{group}-more").into()))
                         .ml(px(12.))
                         .mr(px(0.8))
                         .w(px(16.))
                         .flex_none()
+                        .cursor_pointer()
                         .opacity(0.)
                         .group_hover(group, |s| s.opacity(1.))
-                        .child(icon("icons/more.svg", 16., TEXT_SUBDUED)),
+                        .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.open_ctx_menu(menu_target.clone(), ev.position(), false, cx);
+                        }))
+                        .child(svg().path("icons/more.svg").size(px(16.)).text_color(c(TEXT_SUBDUED)).hover(|s| s.text_color(c(WHITE)))),
                 ),
         )
         .into_any_element()

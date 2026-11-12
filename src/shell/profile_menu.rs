@@ -101,6 +101,7 @@ fn relative_time(created: i64) -> String {
 enum Action {
     Url(&'static str),
     Profile,
+    LogOut,
     Close,
 }
 
@@ -112,7 +113,7 @@ const ITEMS: [(&str, bool, Action); 8] = [
     ("Support", true, Action::Url("https://support.spotify.com/")),
     ("Private session", false, Action::Close),
     ("Settings", false, Action::Close),
-    ("Log out", false, Action::Close),
+    ("Log out", false, Action::LogOut),
 ];
 
 impl Shell {
@@ -175,6 +176,7 @@ impl Shell {
                                     this.open(Page::User(format!("spotify:user:{}", me.id)), cx);
                                 }
                             }
+                            Action::LogOut => this.log_out(cx),
                             Action::Close => {}
                         }
                         cx.notify();

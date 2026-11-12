@@ -127,9 +127,27 @@ impl Shell {
         let is_playing = playing_here && self.playback.as_ref().is_some_and(|p| p.is_playing);
         let page_uri = page.uri.clone();
         let explore = page.top_tracks.first().and_then(|t| t.image.as_deref()).map(|u| images::variant(u, images::Variant::Small));
-        let bar_icon = |id: &'static str, path: &'static str| {
-            div().id(id).w(px(24.)).h(px(48.)).flex_none().flex().items_center().justify_center().cursor_pointer().child(icon(path, 24., TEXT_SUBDUED))
+        // Encore tertiary: subdued -> white and 1.04 (.05s in / .15s out); `on`: green + a dot.
+        let fades = &self.fades;
+        let bar_icon = move |id: &'static str, path: &'static str, on: bool| {
+            let t = fades.get(id);
+            let color = if on { fx::mix(0x1ED760FF, 0x3BE477FF, t) } else { fx::mix(0xB3B3B3FF, 0xFFFFFFFF, t) };
+            div()
+                .id(id)
+                .relative()
+                .w(px(24.))
+                .h(px(48.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .child(fx::scaled_icon(path, 24., 1. + 0.04 * t).text_color(color))
+                .when(on, |d| d.child(div().absolute().bottom(px(4.)).left(px(10.)).size(px(4.)).rounded_full().bg(color)))
         };
+        let shuffle_on = playing_here && self.playback.as_ref().is_some_and(|p| p.shuffle_state);
+        let (follow_uri, followed) = (page.uri.clone(), page.saved);
+        let (menu_uri, menu_name) = (page.uri.clone(), page.name.clone());
         let action_bar = div()
             .flex_none()
             .h(px(48.))
@@ -174,10 +192,32 @@ impl Shell {
                         .child(svg().path("icons/pl_explore_frame.svg").absolute().top_0().left_0().w(px(38.)).h(px(48.)).text_color(c(0xA7A7A7))),
                 )
             })
-            .child(bar_icon("ar-shuffle", "icons/pl_shuffle24.svg"))
+            .child(self.on_fade(
+                bar_icon("ar-shuffle", "icons/pl_shuffle24.svg", shuffle_on).on_click({
+                    let uri = page.uri.clone();
+                    cx.listener(move |this, _, _, cx| {
+                        if playing_here {
+                            this.player(Play::Shuffle(!shuffle_on), cx);
+                        } else {
+                            this.player(Play::Shuffle(true), cx);
+                            this.player(Play::Context(uri.clone()), cx);
+                        }
+                    })
+                }),
+                "ar-shuffle",
+                fx::TERTIARY,
+                cx,
+            ))
             .child(
                 div()
                     .id("ar-follow")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(p) = this.artist_pages.get_mut(&follow_uri) {
+                            p.saved = !followed;
+                        }
+                        this.set_hit_saved(follow_uri.clone(), !followed, cx);
+                        cx.notify();
+                    }))
                     .h(px(32.))
                     .px(px(15.2))
                     .flex_none()
@@ -194,7 +234,16 @@ impl Shell {
                     .text_color(c(WHITE))
                     .child(if page.saved { "Following" } else { "Follow" }),
             )
-            .child(bar_icon("ar-more", "icons/pl_more24.svg"));
+            .child(self.on_fade(
+                bar_icon("ar-more", "icons/pl_more24.svg", false).on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                    if let Some(t) = this.target_for(&menu_uri, &menu_name) {
+                        this.open_ctx_menu(t, ev.position(), false, cx);
+                    }
+                })),
+                "ar-more",
+                fx::TERTIARY,
+                cx,
+            ));
 
         // ---- Popular ----
         let list_w = w - 2. * cs;

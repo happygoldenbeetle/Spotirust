@@ -65,17 +65,30 @@ impl Root {
             return Self { screen: Screen::Main(cx.new(|cx| Shell::new(None, cx))) };
         }
         if let Some(token) = auth::load_token() {
-            let api = api::Api::new(token);
-            return Self { screen: Screen::Main(cx.new(|cx| Shell::new(Some(api), cx))) };
+            return Self { screen: Self::main_screen(api::Api::new(token), window, cx) };
         }
-        let login = cx.new(|_| LoginView::new());
-        cx.subscribe_in(&login, window, |this, _, ev: &LoggedIn, _window, cx| {
-            let api = api::Api::new(ev.0.clone());
-            this.screen = Screen::Main(cx.new(|cx| Shell::new(Some(api), cx)));
+        Self { screen: Self::login_screen(window, cx) }
+    }
+
+    /// The signed-in app; logging out swaps back to the login screen.
+    fn main_screen(api: std::sync::Arc<api::Api>, window: &mut Window, cx: &mut Context<Self>) -> Screen {
+        let shell = cx.new(|cx| Shell::new(Some(api), cx));
+        cx.subscribe_in(&shell, window, |this, _, _: &shell::LoggedOut, window, cx| {
+            this.screen = Self::login_screen(window, cx);
             cx.notify();
         })
         .detach();
-        Self { screen: Screen::Login(login) }
+        Screen::Main(shell)
+    }
+
+    fn login_screen(window: &mut Window, cx: &mut Context<Self>) -> Screen {
+        let login = cx.new(|_| LoginView::new());
+        cx.subscribe_in(&login, window, |this, _, ev: &LoggedIn, window, cx| {
+            this.screen = Self::main_screen(api::Api::new(ev.0.clone()), window, cx);
+            cx.notify();
+        })
+        .detach();
+        Screen::Login(login)
     }
 }
 

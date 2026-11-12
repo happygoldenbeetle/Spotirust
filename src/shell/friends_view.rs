@@ -668,7 +668,11 @@ impl Shell {
                         round_button("friends-close", 32.)
                             .group("friends-close")
                             .hover(|s| s.bg(rgba(0xFFFFFF1A)))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_friends(cx)))
+                            // Its X closes the panel (the header button switches back to Now Playing).
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.right_panel = RightPanel::None;
+                                cx.notify();
+                            }))
                             .child(
                                 svg()
                                     .path("icons/close16.svg")

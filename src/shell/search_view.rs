@@ -397,7 +397,7 @@ impl Shell {
     }
 
     /// Follows / saves (or the reverse) an artist or album from its row.
-    fn set_hit_saved(&mut self, uri: String, saved: bool, cx: &mut Context<Self>) {
+    pub(super) fn set_hit_saved(&mut self, uri: String, saved: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         let text = if saved { "Added to Your Library." } else { "Removed from Your Library." }.to_string();
         self.background_then(cx, text, move || api.set_in_library(&uri, saved), |this, cx| this.reload_library(cx));
@@ -1533,7 +1533,7 @@ impl Shell {
         card.when(can_play, |d| {
             d.child(
                 div().flex_1().flex().justify_end().child(
-                    green_play(48.)
+                    green_play(48.).child(icon("icons/play.svg", 48. * 0.42, 0x000000))
                         .id("search-top-play")
                         .hover(|s| s.bg(c(GREEN_HOVER)))
                         .on_click(cx.listener(move |this, _, _, cx| {
