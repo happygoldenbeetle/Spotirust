@@ -118,6 +118,9 @@ impl Shell {
                             .overflow_hidden()
                             .bg(c(card.color))
                             .cursor_pointer()
+                            .when_some(Page::for_uri(&card.uri), |d, page| {
+                                d.on_click(cx.listener(move |this, _, _, cx| this.open(page.clone(), cx)))
+                            })
                             .when_some(art, |d, image| {
                                 d.child(
                                     img(ImageSource::Render(image))

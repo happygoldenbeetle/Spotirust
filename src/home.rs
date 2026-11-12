@@ -197,7 +197,7 @@ fn section_items(sec: &Value) -> Vec<Item> {
     sec.pointer("/sectionItems/items").and_then(Value::as_array).map(|a| a.iter().filter_map(item).collect()).unwrap_or_default()
 }
 
-fn shelf(sec: &Value) -> Option<Shelf> {
+pub fn shelf(sec: &Value) -> Option<Shelf> {
     let items = section_items(sec);
     let mut title = sec.pointer("/data/title").and_then(label)?;
     if items.is_empty() {
@@ -214,6 +214,11 @@ fn shelf(sec: &Value) -> Option<Shelf> {
         }
     }
     Some(Shelf { uri: s(sec, &["uri"]).unwrap_or_default().to_string(), title, subtitle, items })
+}
+
+/// One Browse category shelf on its own page ("Show all"): the `browseSection` query's response.
+pub fn parse_browse_section(v: &Value) -> Option<Shelf> {
+    shelf(v.pointer("/data/browseSection")?)
 }
 
 /// One Home section on its own page ("Show all"): the `homeSection` query's response.

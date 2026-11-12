@@ -36,6 +36,7 @@ mod like_fx;
 mod section_view;
 mod lib_find;
 mod lib_chips;
+mod genre_view;
 mod fx;
 
 use std::collections::{HashMap, HashSet};
@@ -130,6 +131,8 @@ pub struct Shell {
     artist_pages: HashMap<String, ArtistPage>,
     /// Loaded "Show all" section pages by section URI.
     section_pages: HashMap<String, home::Shelf>,
+    /// Loaded Browse category pages by URI.
+    genre_pages: HashMap<String, genre_view::GenrePage>,
     user_pages: HashMap<String, UserPage>,
     /// The search box and its dropdown.
     search: search_view::SearchUi,
@@ -238,6 +241,8 @@ pub enum Page {
     Search(String, search::Filter),
     /// A Home section's "Show all" page (`/section/<id>`): its URI and the shelf's title.
     Section(String, String),
+    /// A Browse category (`/genre/<id>`): its `spotify:page:` URI.
+    Genre(String),
 }
 
 impl Page {
@@ -249,8 +254,11 @@ impl Page {
             "artist" => Some(Self::Artist(uri.to_string())),
             "collection" => Some(Self::Liked),
             "user" if uri.ends_with(":collection") || uri.ends_with(":collection:tracks") => Some(Self::Liked),
+            // folders have no page of their own here yet (not a profile)
+            "user" if uri.contains(":folder:") => None,
             "user" => Some(Self::User(uri.to_string())),
             "section" => Some(Self::Section(uri.to_string(), String::new())),
+            "page" => Some(Self::Genre(uri.to_string())),
             _ => None,
         }
     }
@@ -423,6 +431,7 @@ impl Shell {
             page_scroll: gpui::ScrollHandle::new(),
             artist_pages: HashMap::new(),
             section_pages: HashMap::new(),
+            genre_pages: HashMap::new(),
             user_pages: HashMap::new(),
             search: search_view::SearchUi::new(),
             search_pages: HashMap::new(),
@@ -1266,6 +1275,7 @@ impl Shell {
             Page::User(uri) => self.load_user(uri, cx),
             Page::Browse => self.load_browse(cx),
             Page::Section(uri, _) => self.load_section(uri, cx),
+            Page::Genre(uri) => self.load_genre(uri, cx),
             Page::Home | Page::Lyrics => {}
         }
         cx.notify();
@@ -3114,6 +3124,7 @@ impl Render for Shell {
                             Page::Lyrics => self.lyrics_view(main_w, window, cx),
                             Page::Search(query, filter) => self.search_view(&query, filter, main_w, window, cx),
                             Page::Section(uri, title) => self.section_view(&uri, &title, main_w, cx),
+                            Page::Genre(uri) => self.genre_view(&uri, main_w, window, cx),
                         };
                         // GPUI clips children to the panel's rectangle, not its 8px rounded corners, so
                         // full-bleed content (sticky header, About image) would square them off: mask

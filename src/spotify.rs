@@ -39,6 +39,8 @@ const SEARCH_AUTHORS_HASH: &str = "4a9d403a7cbc7e19da5520d619a865472b35382b043bf
 /// One document holds `recentSearches`, `saveRecentSearches` and `removeRecentSearches`.
 const RECENT_SEARCHES_HASH: &str = "ece96d7b82c820fb9938dd1df50dee3e53737d808c3883e3d01c467c423601b0";
 const BROWSE_ALL_HASH: &str = "dbd8b55e09a58afc52eab438bc228ba28fd72ac2f2148c6c26354980e4579001";
+const BROWSE_PAGE_HASH: &str = "f5c4e6d668f5716464a231c1cc8b22c1cbf6ad68b09929fd7de813a30581298b";
+const BROWSE_SECTION_HASH: &str = "b13c1cccbfcb6947753c2613411b3566485c21fd5f36d80a80bb64be61ba2d51";
 const USER_TOP_HASH: &str = "61b7353d3625780022dbc63d459eb64cd609e7e5e2a820f9160d65030efe2e15";
 const EXTRACTED_COLORS_HASH: &str = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
 const ALBUM_HASH: &str = "0b6ce3511e1b02e4a40fa95440f992acbe85080eb308af9194322d708fc1914f";
@@ -447,6 +449,39 @@ impl Spotify {
             }),
         )?;
         dump("browse_all", &v);
+        Ok(v)
+    }
+
+    /// Blocking: a Browse category page (`/genre/<id>`, `spotify:page:<id>`), as the client loads it.
+    pub fn browse_page(&self, uri: &str) -> Result<serde_json::Value> {
+        let v = self.pathfinder(
+            "browsePage",
+            BROWSE_PAGE_HASH,
+            serde_json::json!({
+                "pagePagination": { "offset": 0, "limit": 10 },
+                "sectionPagination": { "offset": 0, "limit": 10 },
+                "uri": uri,
+                "browseEndUserIntegration": "INTEGRATION_DESKTOP",
+                "includeEpisodeContentRatingsV2": true
+            }),
+        )?;
+        dump("browse_page", &v);
+        Ok(v)
+    }
+
+    /// Blocking: one Browse category shelf with up to 20 items ("Show all", `browseSection`).
+    pub fn browse_section(&self, uri: &str) -> Result<serde_json::Value> {
+        let v = self.pathfinder(
+            "browseSection",
+            BROWSE_SECTION_HASH,
+            serde_json::json!({
+                "pagination": { "offset": 0, "limit": 20 },
+                "uri": uri,
+                "browseEndUserIntegration": "INTEGRATION_DESKTOP",
+                "includeEpisodeContentRatingsV2": true
+            }),
+        )?;
+        dump("browse_section", &v);
         Ok(v)
     }
 

@@ -14,12 +14,18 @@ impl Shell {
         if self.section_pages.contains_key(&uri) || !self.loading_pages.insert(uri.clone()) {
             return;
         }
+        // a Browse category's shelf loads through its own query
+        let browse = self.is_browse_section(&uri);
         cx.spawn(async move |this, cx| {
             let u = uri.clone();
-            let result = cx.background_executor().spawn(async move { sp.home_section(&u) }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { if browse { sp.browse_section(&u) } else { sp.home_section(&u) } })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 this.loading_pages.remove(&uri);
-                match result.map(|v| home::parse_section(&v)) {
+                let parse = if browse { home::parse_browse_section } else { home::parse_section };
+                match result.map(|v| parse(&v)) {
                     Ok(Some(shelf)) => {
                         this.section_pages.insert(uri, shelf);
                     }
