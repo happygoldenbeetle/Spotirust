@@ -964,8 +964,11 @@ impl Shell {
 
         // ---- trailing buttons ----
         let mut trailing: Vec<AnyElement> = Vec::new();
-        let circle_button = |id: String, on: bool| {
-            div().id(name_id(id)).w(px(16.)).h(px(32.)).flex_none().flex().items_center().cursor_pointer().child(if on {
+        let mut burst = if hit.kind == HitKind::Track { self.like_burst(&hit.uri, 16.) } else { None };
+        let mut circle_button = |id: String, on: bool| {
+            div().id(name_id(id)).w(px(16.)).h(px(32.)).flex_none().flex().items_center().cursor_pointer().child(if let Some(b) = burst.take() {
+                b
+            } else if on {
                 icon("icons/check_circle.svg", 16., GREEN).into_any_element()
             } else {
                 svg().path("icons/add_circle.svg").size(px(16.)).text_color(c(TEXT_SUBDUED)).hover(|s| s.text_color(c(WHITE))).into_any_element()

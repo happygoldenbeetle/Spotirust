@@ -897,7 +897,9 @@ impl Shell {
                                 this.like_track(uri.clone(), cx);
                             }
                         }));
-                    if liked {
+                    if let Some(b) = self.like_burst(&t.uri, 16.) {
+                        btn.child(b)
+                    } else if liked {
                         // measured: liked tracks show the green check at all times
                         btn.child(icon("icons/check_circle.svg", 16., GREEN))
                     } else {

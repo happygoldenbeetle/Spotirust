@@ -277,6 +277,7 @@ impl Shell {
 
     /// Updates every place that shows whether `track` is liked.
     pub(super) fn set_liked_local(&mut self, track: &str, on: bool) {
+        self.like_burst_start(track, on);
         if on {
             self.liked.insert(track.to_string());
         } else {

@@ -32,6 +32,7 @@ mod lyrics_view;
 mod miniplayer;
 mod add_popover;
 mod search_view;
+mod like_fx;
 
 use std::collections::{HashMap, HashSet};
 
@@ -148,6 +149,8 @@ pub struct Shell {
     lib_hover_at: std::time::Instant,
     /// Track URIs in Liked Songs (tracklists show a green check for these).
     liked: HashSet<String>,
+    /// Running like / unlike bursts by track URI: (liked, started).
+    like_fx: HashMap<String, (bool, std::time::Instant)>,
     /// Artist page: "See more" expanded (10 popular tracks), selected discography filter.
     artist_more: bool,
     disco_filter: usize,
@@ -411,6 +414,7 @@ impl Shell {
             create_unhover: None,
             lib_hover_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
             liked: HashSet::new(),
+            like_fx: HashMap::new(),
             artist_more: false,
             disco_filter: 0,
             bar_fx: Default::default(),
@@ -1149,6 +1153,7 @@ impl Shell {
         let (Some(id), Some(api)) = (self.playing_track_id(), self.api.clone()) else { return };
         let target = !self.is_saved();
         self.saved = Some((id.clone(), target));
+        self.like_burst_start(&format!("spotify:track:{id}"), target);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let tid = id.clone();
@@ -2694,15 +2699,27 @@ impl Shell {
                                             .items_center()
                                             .justify_center()
                                             .cursor_pointer()
-                                            .on_click(cx.listener(|this, _, _, cx| this.toggle_saved(cx)))
-                                            .child(if saved {
-                                                svg().path("icons/check_circle24.svg").size(px(24.)).text_color(c(GREEN))
+                                            .on_click(cx.listener(|this, ev: &gpui::ClickEvent, _, cx| {
+                                                // Like the player bar: liked opens "Add to playlist", else likes it.
+                                                let Some(id) = this.playing_track_id() else { return };
+                                                let uri = format!("spotify:track:{id}");
+                                                if this.is_saved() {
+                                                    this.open_add_popover(uri, Self::anchor_of(ev, 24.), cx);
+                                                } else {
+                                                    this.like_track(uri, cx);
+                                                }
+                                            }))
+                                            .child(if let Some(b) = self.playing_track_id().and_then(|id| self.like_burst(&format!("spotify:track:{id}"), 24.)) {
+                                                b
+                                            } else if saved {
+                                                svg().path("icons/check_circle24.svg").size(px(24.)).text_color(c(GREEN)).into_any_element()
                                             } else {
                                                 svg()
                                                     .path("icons/add_circle24.svg")
                                                     .size(px(24.))
                                                     .text_color(c(TEXT_SUBDUED))
                                                     .group_hover("npv-add", |s| s.text_color(c(WHITE)))
+                                                    .into_any_element()
                                             }),
                                     ),
                             )
@@ -2836,7 +2853,7 @@ impl Render for Shell {
             self.open_miniplayer(window, cx);
         }
         self.refresh_mini_color(cx);
-        if self.fx_animating() {
+        if self.fx_animating() || self.like_burst_animating() {
             window.request_animation_frame();
         }
         div()

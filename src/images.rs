@@ -144,7 +144,7 @@ pub fn set_scale(scale: f32) {
     SCALE.store(scale.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
-fn scale() -> f32 {
+pub fn scale() -> f32 {
     f32::from_bits(SCALE.load(std::sync::atomic::Ordering::Relaxed))
 }
 

@@ -274,7 +274,10 @@ impl Shell {
                             this.like_track(uri, cx);
                         }
                     }))
-                    .child(svg().path(path).size(px(16. * scale)).text_color(mix(rest, hover, t_)))
+                    .child(match self.playing_track_id().and_then(|id| self.like_burst(&format!("spotify:track:{id}"), 16.)) {
+                        Some(b) => b,
+                        None => svg().path(path).size(px(16. * scale)).text_color(mix(rest, hover, t_)).into_any_element(),
+                    })
             })
         });
 
