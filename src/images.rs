@@ -8,7 +8,17 @@ use gpui::{App, AppContext, Context, Entity, Global, RenderImage};
 #[derive(Default)]
 pub struct ImageCache {
     entries: HashMap<String, Entry>,
+    /// The newest decoded rendition of each URL, any size: shown while the size a slot asks for
+    /// loads (resizing a panel asks for new sizes every frame; without this, covers flash empty).
+    latest: HashMap<String, Arc<RenderImage>>,
+    /// URLs with a load in flight (one at a time per URL, so a drag doesn't queue a load per pixel).
+    inflight: std::collections::HashSet<String>,
+    /// Sized renditions kept per URL, oldest first.
+    sizes: HashMap<String, std::collections::VecDeque<String>>,
 }
+
+/// Sized renditions kept per URL (a cover can show in a few slots at once).
+const SIZES_PER_URL: usize = 4;
 
 enum Entry {
     Loading,
@@ -328,17 +338,36 @@ impl ImageCache {
         let key = if width > 0 { format!("{url}#{width}") } else { url.to_string() };
         match self.entries.get(&key) {
             Some(Entry::Ready(img)) => return Some(img.clone()),
-            Some(_) => return None,
+            Some(Entry::Failed) => return None,
+            Some(Entry::Loading) => return self.latest.get(url).cloned(),
             None => {}
         }
+        if self.inflight.contains(url) {
+            // Asked again once that load lands (it notifies).
+            return self.latest.get(url).cloned();
+        }
+        self.inflight.insert(url.to_string());
         self.entries.insert(key.clone(), Entry::Loading);
         let url = url.to_string();
         cx.spawn(async move |this, cx| {
             let u = url.clone();
             let result = cx.background_executor().spawn(async move { fetch(&u, width) }).await;
             let _ = this.update(cx, |this, cx| {
+                this.inflight.remove(&url);
                 let entry = match result {
-                    Ok(img) => Entry::Ready(img),
+                    Ok(img) => {
+                        this.latest.insert(url.clone(), img.clone());
+                        if width > 0 {
+                            let kept = this.sizes.entry(url.clone()).or_default();
+                            kept.push_back(key.clone());
+                            while kept.len() > SIZES_PER_URL {
+                                if let Some(old) = kept.pop_front() {
+                                    this.entries.remove(&old);
+                                }
+                            }
+                        }
+                        Entry::Ready(img)
+                    }
                     Err(e) => {
                         eprintln!("image {url}: {e:#}");
                         Entry::Failed
