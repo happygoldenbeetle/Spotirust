@@ -30,6 +30,8 @@ pub struct Item {
 
 #[derive(Clone, Debug)]
 pub struct Shelf {
+    /// `spotify:section:…` ("Show all" opens it).
+    pub uri: String,
     pub title: String,
     pub subtitle: Option<String>,
     pub items: Vec<Item>,
@@ -180,31 +182,42 @@ pub fn parse(v: &Value) -> HomeFeed {
     }
     let sections = home.pointer("/sectionContainer/sections/items").and_then(Value::as_array);
     for sec in sections.into_iter().flatten() {
-        let typename = s(sec, &["data", "__typename"]).unwrap_or("");
-        let items: Vec<Item> = sec
-            .pointer("/sectionItems/items")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(item).collect())
-            .unwrap_or_default();
-        if typename == "HomeShortsSectionData" {
-            feed.shortcuts = items;
+        if s(sec, &["data", "__typename"]) == Some("HomeShortsSectionData") {
+            feed.shortcuts = section_items(sec);
             continue;
         }
-        let Some(mut title) = sec.pointer("/data/title").and_then(label) else { continue };
-        if items.is_empty() {
-            continue;
+        if let Some(shelf) = shelf(sec) {
+            feed.shelves.push(shelf);
         }
-        let mut subtitle = sec.pointer("/data/subtitle").and_then(label).filter(|s| !s.is_empty());
-        // "Made For {0}": the client shows the prefix as the small line and the name as the title.
-        if let Some(base) = s(sec, &["data", "title", "translatedBaseText"]) {
-            if let Some(prefix) = base.strip_suffix("{0}").map(str::trim).filter(|p| !p.is_empty()) {
-                if let Some(name) = title.strip_prefix(prefix) {
-                    title = name.trim().to_string();
-                    subtitle = Some(prefix.to_string());
-                }
-            }
-        }
-        feed.shelves.push(Shelf { title, subtitle, items });
     }
     feed
+}
+
+fn section_items(sec: &Value) -> Vec<Item> {
+    sec.pointer("/sectionItems/items").and_then(Value::as_array).map(|a| a.iter().filter_map(item).collect()).unwrap_or_default()
+}
+
+fn shelf(sec: &Value) -> Option<Shelf> {
+    let items = section_items(sec);
+    let mut title = sec.pointer("/data/title").and_then(label)?;
+    if items.is_empty() {
+        return None;
+    }
+    let mut subtitle = sec.pointer("/data/subtitle").and_then(label).filter(|s| !s.is_empty());
+    // "Made For {0}": the client shows the prefix as the small line and the name as the title.
+    if let Some(base) = s(sec, &["data", "title", "translatedBaseText"]) {
+        if let Some(prefix) = base.strip_suffix("{0}").map(str::trim).filter(|p| !p.is_empty()) {
+            if let Some(name) = title.strip_prefix(prefix) {
+                title = name.trim().to_string();
+                subtitle = Some(prefix.to_string());
+            }
+        }
+    }
+    Some(Shelf { uri: s(sec, &["uri"]).unwrap_or_default().to_string(), title, subtitle, items })
+}
+
+/// One Home section on its own page ("Show all"): the `homeSection` query's response.
+pub fn parse_section(v: &Value) -> Option<Shelf> {
+    let sec = v.pointer("/data/homeSections/sections/0")?;
+    shelf(sec)
 }

@@ -557,6 +557,26 @@ impl Spotify {
         Ok(out)
     }
 
+    /// Blocking: one Home section with up to 20 items, as the client's "Show all" page loads it
+    /// (`homeSection`, same persisted query document as `home`).
+    pub fn home_section(&self, uri: &str) -> Result<serde_json::Value> {
+        let sp_t = self.web_token().unwrap_or_default();
+        self.pathfinder(
+            "homeSection",
+            HOME_HASH,
+            serde_json::json!({
+                "includeHomeChapterVideoCards": false,
+                "uri": uri,
+                "homeEndUserIntegration": "INTEGRATION_DESKTOP",
+                "timeZone": local_time_zone(),
+                "sp_t": sp_t,
+                "sectionItemsOffset": 0,
+                "sectionItemsLimit": 20,
+                "includeEpisodeContentRatingsV2": true
+            }),
+        )
+    }
+
     /// Blocking: the full Home feed (all sections), like the real client's first Home load.
     pub fn home(&self, facet: &str) -> Result<serde_json::Value> {
         let sp_t = self.web_token().unwrap_or_default();
