@@ -47,6 +47,8 @@ const BROWSE_SECTION_HASH: &str = "b13c1cccbfcb6947753c2613411b3566485c21fd5f36d
 const USER_TOP_HASH: &str = "61b7353d3625780022dbc63d459eb64cd609e7e5e2a820f9160d65030efe2e15";
 const EXTRACTED_COLORS_HASH: &str = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
 const NPV_ARTIST_HASH: &str = "e1ae46a21911a3075c1aa29bf09a6c60f9a45b6a2b1132429f10ad06c299b5d7";
+const ARTIST_ABOUT_HASH: &str = "702e29a866e0b4b4fabdf974454512a2c32d93643b1969b7a3a0dd92084f05f6";
+const TRACK_CREDITS_HASH: &str = "f135fb9be58a72d041ab5d214d817021a272405d883860468e2627afb01a3ca9";
 const ALBUM_HASH: &str = "0b6ce3511e1b02e4a40fa95440f992acbe85080eb308af9194322d708fc1914f";
 
 pub struct Spotify {
@@ -293,6 +295,63 @@ impl Spotify {
         self.connection.lock().unwrap().clone().ok_or_else(|| anyhow!("no dealer connection id"))
     }
 
+    /// Blocking: the account's Connect state as the client sees it: registers this session as a
+    /// hidden observer device (never a playback target) on the dealer connection, and the
+    /// answer is the cluster, whose player state lists the real queue (user-queued tracks first,
+    /// then the context, then autoplay).
+    pub fn connect_queue(&self) -> Result<ConnectQueue> {
+        use librespot_protocol::connect::{Capabilities, Cluster, Device, DeviceInfo, MemberType, PutStateReason, PutStateRequest};
+        use librespot_protocol::devices::DeviceType;
+        use protobuf::{EnumOrUnknown, Message, MessageField};
+        let id = self.connection_id()?;
+        if self.session.connection_id() != id {
+            self.session.set_connection_id(&id);
+        }
+        let req = PutStateRequest {
+            member_type: EnumOrUnknown::new(MemberType::CONNECT_STATE),
+            put_state_reason: EnumOrUnknown::new(PutStateReason::NEW_DEVICE),
+            device: MessageField::some(Device {
+                device_info: MessageField::some(DeviceInfo {
+                    can_play: false,
+                    name: "Spotirust".into(),
+                    device_id: self.session.device_id().to_string(),
+                    device_type: EnumOrUnknown::new(DeviceType::COMPUTER),
+                    capabilities: MessageField::some(Capabilities {
+                        can_be_player: false,
+                        hidden: true,
+                        is_observable: true,
+                        needs_full_player_state: true,
+                        gaia_eq_connect_id: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let bytes = self.rt.block_on(self.session.spclient().put_connect_state_request(&req)).map_err(|e| anyhow!("connect-state: {e}"))?;
+        let cluster = Cluster::parse_from_bytes(&bytes)?;
+        if let Some(dir) = std::env::var_os("SPOTIRUST_DUMP") {
+            let _ = std::fs::write(std::path::Path::new(&dir).join("cluster.txt"), protobuf::text_format::print_to_string_pretty(&cluster));
+        }
+        let ps = cluster.player_state.as_ref();
+        let item = |t: &librespot_protocol::player::ProvidedTrack| QueuedItem {
+            uri: t.uri.clone(),
+            uid: t.uid.clone(),
+            provider: t.provider.clone(),
+            metadata: t.metadata.clone().into_iter().collect(),
+        };
+        Ok(ConnectQueue {
+            active_device: cluster.active_device_id.clone(),
+            context_uri: ps.map(|p| p.context_uri.clone()).unwrap_or_default(),
+            current: ps.and_then(|p| p.track.as_ref()).map(item),
+            next: ps
+                .map(|p| p.next_tracks.iter().filter(|t| t.uri.starts_with("spotify:track:") || t.uri.starts_with("spotify:episode:")).map(item).collect())
+                .unwrap_or_default(),
+        })
+    }
+
     /// Blocking: starts the built-in Connect device on this runtime.
     pub fn start_player(&self) -> Result<crate::player::LocalPlayer> {
         crate::player::LocalPlayer::start(&self.rt)
@@ -490,6 +549,54 @@ impl Spotify {
         )?;
         dump("discography_all", &v);
         Ok(v)
+    }
+
+    /// Blocking: what the artist About dialog loads when it opens (`queryArtistAboutModal`):
+    /// stats with the world rank, top cities, the gallery, biography and social links.
+    pub fn artist_about(&self, artist: &str) -> Result<serde_json::Value> {
+        let v = self.pathfinder("queryArtistAboutModal", ARTIST_ABOUT_HASH, serde_json::json!({ "artistUri": artist }))?;
+        dump("artist_about", &v);
+        Ok(v)
+    }
+
+    /// Blocking: all of a track's credits (`queryTrackCreditsGroupedModal`, up to 100 lines), as
+    /// the Credits section and dialog list them.
+    pub fn track_credits(&self, track: &str) -> Result<serde_json::Value> {
+        let v = self.pathfinder(
+            "queryTrackCreditsGroupedModal",
+            TRACK_CREDITS_HASH,
+            serde_json::json!({ "trackUri": track, "contributorsLimit": 100, "contributorsOffset": 0 }),
+        )?;
+        dump("track_credits", &v);
+        Ok(v)
+    }
+
+    /// Blocking: an entity's VISUAL_IDENTITY_TRAIT (metadata extension 179), which the Now
+    /// Playing view's About card draws from: the photo (wide full-bleed, else 16:9 cover, else
+    /// square full-bleed) and the avatar (square cover). Each is the largest rendition's URL.
+    pub fn visual_identity(&self, uri: &str) -> Result<VisualIdentity> {
+        use librespot_protocol::extended_metadata::{BatchedEntityRequest, EntityRequest, ExtensionQuery};
+        const VISUAL_IDENTITY_TRAIT: i32 = 179;
+        let req = BatchedEntityRequest {
+            entity_request: vec![EntityRequest {
+                entity_uri: uri.to_owned(),
+                query: vec![ExtensionQuery { extension_kind: protobuf::EnumOrUnknown::from_i32(VISUAL_IDENTITY_TRAIT), ..Default::default() }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let res = self.rt.block_on(self.session.spclient().get_extended_metadata(req)).map_err(|e| anyhow!("{e}"))?;
+        let bytes = res
+            .extended_metadata
+            .iter()
+            .flat_map(|a| a.extension_data.iter())
+            .find_map(|d| d.extension_data.as_ref().map(|any| any.value.clone()))
+            .unwrap_or_default();
+        if let Some(dir) = std::env::var_os("SPOTIRUST_DUMP") {
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            let _ = std::fs::write(std::path::Path::new(&dir).join("visual_identity.txt"), hex);
+        }
+        Ok(VisualIdentity::parse(&bytes))
     }
 
     /// Blocking: what the Now Playing view shows below the cover (`queryNpvArtist`): the track's
@@ -730,6 +837,129 @@ fn windows_zone() -> Option<String> {
 }
 
 /// Debug: with `SPOTIRUST_DUMP=<dir>`, raw pathfinder responses are written there as `<name>.json`.
+/// The images of an entity's VISUAL_IDENTITY_TRAIT that the Now Playing view uses.
+#[derive(Clone, Debug, Default)]
+pub struct VisualIdentity {
+    /// The About card's photo: wide full-bleed (6), else the 16:9 cover (2), else the square
+    /// full-bleed image (5).
+    pub photo: Option<String>,
+    /// The square cover (1), shown round when there's no photo.
+    pub avatar: Option<String>,
+}
+
+impl VisualIdentity {
+    fn parse(b: &[u8]) -> Self {
+        let fields = pb_fields(b);
+        let image = |n: u32| fields.iter().filter(|(f, _)| *f == n).find_map(|(_, v)| match v {
+            PbVal::Bytes(m) => pb_largest_image(m),
+            _ => None,
+        });
+        Self { photo: image(6).or_else(|| image(2)).or_else(|| image(5)), avatar: image(1) }
+    }
+}
+
+enum PbVal<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+}
+
+fn pb_varint(b: &[u8], i: &mut usize) -> Option<u64> {
+    let mut v = 0u64;
+    for shift in (0..64).step_by(7) {
+        let byte = *b.get(*i)?;
+        *i += 1;
+        v |= u64::from(byte & 0x7F) << shift;
+        if byte & 0x80 == 0 {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// A protobuf message's top-level fields (varints and length-delimited values; fixed-width ones
+/// are skipped). Stops at the first malformed field.
+fn pb_fields(b: &[u8]) -> Vec<(u32, PbVal<'_>)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let Some(key) = pb_varint(b, &mut i) else { break };
+        let field = (key >> 3) as u32;
+        match key & 7 {
+            0 => match pb_varint(b, &mut i) {
+                Some(v) => out.push((field, PbVal::Varint(v))),
+                None => break,
+            },
+            1 => i += 8,
+            2 => {
+                let Some(len) = pb_varint(b, &mut i) else { break };
+                let end = i + len as usize;
+                if end > b.len() {
+                    break;
+                }
+                out.push((field, PbVal::Bytes(&b[i..end])));
+                i = end;
+            }
+            5 => i += 4,
+            _ => break,
+        }
+    }
+    out
+}
+
+/// The first `http` string anywhere inside a message (a few levels deep).
+fn pb_find_url(b: &[u8], depth: u32) -> Option<String> {
+    for (_, v) in pb_fields(b) {
+        if let PbVal::Bytes(m) = v {
+            if m.starts_with(b"http") {
+                if let Ok(s) = std::str::from_utf8(m) {
+                    return Some(s.to_owned());
+                }
+            } else if depth > 0 {
+                if let Some(u) = pb_find_url(m, depth - 1) {
+                    return Some(u);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// An image message `{ repeated instances { flatFile { cdnUrl }, size } ... }`: the URL of the
+/// instance with the largest size value.
+fn pb_largest_image(b: &[u8]) -> Option<String> {
+    pb_fields(b)
+        .into_iter()
+        .filter_map(|(_, v)| match v {
+            PbVal::Bytes(m) => {
+                let url = pb_find_url(m, 2)?;
+                let size = pb_fields(m).iter().find_map(|(_, v)| if let PbVal::Varint(n) = v { Some(*n) } else { None }).unwrap_or(0);
+                Some((size, url))
+            }
+            _ => None,
+        })
+        .max_by_key(|(size, _)| *size)
+        .map(|(_, url)| url)
+}
+
+/// One entry of the Connect player state's track lists.
+#[derive(Clone, Debug, Default)]
+pub struct QueuedItem {
+    pub uri: String,
+    pub uid: String,
+    /// "queue" (added by the user), "context", "autoplay", ...
+    pub provider: String,
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
+/// What the Connect cluster says is playing and what follows.
+#[derive(Clone, Debug, Default)]
+pub struct ConnectQueue {
+    pub active_device: String,
+    pub context_uri: String,
+    pub current: Option<QueuedItem>,
+    pub next: Vec<QueuedItem>,
+}
+
 fn dump(name: &str, v: &serde_json::Value) {
     if let Some(dir) = std::env::var_os("SPOTIRUST_DUMP") {
         let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{name}.json")), v.to_string());

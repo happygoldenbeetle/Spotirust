@@ -715,7 +715,7 @@ impl Shell {
 }
 
 /// `2026-11-22T18:00+05:30` -> ("Nov", "22", "Sun 6:00 PM"), in the concert's own local time.
-fn concert_date(iso: &str) -> (String, String, String) {
+pub(super) fn concert_date(iso: &str) -> (String, String, String) {
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
     let n = |r: std::ops::Range<usize>| iso.get(r).and_then(|x| x.parse::<i64>().ok());

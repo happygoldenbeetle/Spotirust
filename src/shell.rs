@@ -286,6 +286,8 @@ impl Page {
             "user" => Some(Self::User(uri.to_string())),
             "section" => Some(Self::Section(uri.to_string(), String::new())),
             "page" => Some(Self::Genre(uri.to_string())),
+            // `spotify:search:label%3A%22Roc-A-Fella%22` (biography label links): that search.
+            "search" => Some(Self::Search(crate::auth::percent_decode(uri.splitn(3, ':').nth(2)?), search::Filter::All)),
             _ => None,
         }
     }
@@ -620,6 +622,12 @@ impl Shell {
                     if let Some((a, t)) = std::env::var("SPOTIRUST_DUMP_NPV").ok().as_deref().and_then(|s| s.split_once('|')) {
                         if let Err(e) = sp.npv_artist(a, t) {
                             eprintln!("dump npv: {e:#}");
+                        }
+                    }
+                    if std::env::var_os("SPOTIRUST_DUMP_CLUSTER").is_some() {
+                        match sp.connect_queue() {
+                            Ok(q) => eprintln!("cluster: active {} ctx {} next {}", q.active_device, q.context_uri, q.next.len()),
+                            Err(e) => eprintln!("dump cluster: {e:#}"),
                         }
                     }
                     if let Ok(uri) = std::env::var("SPOTIRUST_DUMP_ARTIST") {
@@ -2843,7 +2851,7 @@ impl Shell {
     //   add button 24x48 at the right; Lyrics preview card 28.8 below the artists: 177 tall, radius 8,
     //   padding 16, colour-lyrics background, "Lyrics preview" 16/700, lines 24px title font
     //   (line 28.8, 14.4 apart) in the colour-lyrics text colour.
-    fn now_playing_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn now_playing_panel(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let track = self.playback.as_ref().and_then(|p| p.item.clone());
         let art_url = track
             .as_ref()
@@ -2857,7 +2865,7 @@ impl Shell {
         let lyrics = self.lyrics.as_ref().and_then(|l| l.1.clone());
         let saved = self.is_saved();
         let inner_w = self.right_w - 32.;
-        let sections = self.npv_sections(inner_w, lyrics.is_some(), cx);
+        let sections = self.npv_sections(inner_w, lyrics.is_some(), window, cx);
 
         let header_button = |id: &'static str, path: &'static str| {
             round_button(id, 32.).group(id).child(
@@ -3214,7 +3222,7 @@ impl Render for Shell {
                     .when(right_open, |d| d.child(self.resize_bar(Side::Right, cx)))
                     .children(match self.right_panel {
                         RightPanel::None => None,
-                        RightPanel::NowPlaying => Some(self.now_playing_panel(cx).into_any_element()),
+                        RightPanel::NowPlaying => Some(self.now_playing_panel(window, cx).into_any_element()),
                         RightPanel::Friends => Some(self.friends_panel(cx).into_any_element()),
                         RightPanel::Queue => Some(self.queue_panel(cx).into_any_element()),
                         RightPanel::Devices => Some(self.devices_panel(cx).into_any_element()),

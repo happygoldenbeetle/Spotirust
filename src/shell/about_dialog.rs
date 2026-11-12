@@ -48,11 +48,44 @@ impl Shell {
             .filter(|a| a.uri == artist)
             .or_else(|| self.artist_pages.get(artist).map(|p| &p.about))
             .cloned();
-        if let Some(about) = about {
-            self.about_scroll.set_offset(gpui::point(px(0.), px(0.)));
-            self.about_dialog = Some(AboutDialog { about, index: 0, hover: None });
-            cx.notify();
-        }
+        // With nothing cached it opens empty and fills in.
+        let about = about.unwrap_or_else(|| About { uri: artist.to_string(), ..Default::default() });
+        self.about_scroll.set_offset(gpui::point(px(0.), px(0.)));
+        self.about_dialog = Some(AboutDialog { about, index: 0, hover: None });
+        cx.notify();
+        // Like the client, the dialog loads its own query (world rank, social links), and
+        // fills in once it lands.
+        let Some(sp) = self.spotify.clone() else { return };
+        let uri = artist.to_string();
+        cx.spawn(async move |this, cx| {
+            let u = uri.clone();
+            let res = cx.background_executor().spawn(async move { sp.artist_about(&u) }).await;
+            let _ = this.update(cx, |this, cx| {
+                let v = match res {
+                    Ok(v) => v,
+                    Err(e) => return eprintln!("artist about: {e:#}"),
+                };
+                let Some(a) = v.pointer("/data/artistUnion") else { return };
+                let mut fresh = ar::parse_about(a);
+                fresh.uri = uri.clone();
+                match this.about_dialog.as_mut() {
+                    Some(d) if d.about.uri == uri => {
+                        if fresh.name.is_empty() {
+                            fresh.name = d.about.name.clone();
+                        }
+                        if fresh.gallery.is_empty() {
+                            fresh.gallery = d.about.gallery.clone();
+                        }
+                        d.index = d.index.min(fresh.gallery.len().saturating_sub(1));
+                        d.about = fresh;
+                    }
+                    // Closed (or showing another artist) meanwhile.
+                    _ => return,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Opens the playing track's Credits dialog (Now Playing view "Show all").
@@ -97,7 +130,7 @@ impl Shell {
 
     pub(super) fn about_dialog_view(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(d) = self.credits_dialog.as_ref() {
-            return Some(self.credits_dialog_el(d, cx));
+            return Some(self.credits_dialog_el(d, window, cx));
         }
         let d = self.about_dialog.as_ref()?;
         let a = &d.about;
@@ -140,7 +173,34 @@ impl Shell {
                 .child(div().text_size(px(32.)).line_height(px(38.4)).font_weight(FontWeight::BOLD).font_family(title_font()).text_color(c(WHITE)).child(ar::grouped(n)))
                 .child(div().text_size(px(14.)).line_height(px(19.2)).text_color(c(TEXT_SUBDUED)).child(label))
         };
-        let mut stats = div().w(px(179.9)).flex_none().flex().flex_col().child(stat(a.followers, "Followers"));
+        // Column widths as the client's flexbox gives them: the bio column is 509 wide, the stats
+        // column as wide as its widest number plus 40, both shrinking (by size) into the 688 row.
+        let num_font = gpui::font(title_font()).bold();
+        let widest = [a.followers, a.monthly_listeners]
+            .iter()
+            .filter(|n| **n > 0)
+            .map(|n| super::playlist_view::text_width(window, &ar::grouped(*n), 32., num_font.clone()) + 40.)
+            .fold(80_f32, f32::max);
+        let (stats_w, bio_w) = if widest + 509. > 688. { (widest * 688. / (widest + 509.), 509. * 688. / (widest + 509.)) } else { (widest, 509.) };
+        let mut stats = div().w(px(stats_w)).flex_none().flex().flex_col();
+        if a.world_rank > 0 {
+            // "#24 in the world": an 80px #0d72ea disc, 40 above the numbers.
+            stats = stats.child(
+                div()
+                    .mb(px(40.))
+                    .size(px(80.))
+                    .rounded_full()
+                    .bg(c(0x0D72EA))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .text_color(c(WHITE))
+                    .child(div().text_size(px(24.)).line_height(px(28.8)).font_weight(FontWeight::BOLD).font_family(title_font()).child(format!("#{}", a.world_rank)))
+                    .child(div().mt(px(-4.)).text_size(px(12.)).line_height(px(16.8)).child("in the world")),
+            );
+        }
+        stats = stats.child(stat(a.followers, "Followers"));
         if a.monthly_listeners > 0 {
             stats = stats.child(stat(a.monthly_listeners, "Monthly Listeners").mt(px(40.)));
         }
@@ -158,8 +218,40 @@ impl Shell {
         if !a.cities.is_empty() {
             stats = stats.child(cities);
         }
+        // Social links: 24px icon + 14px label, white .7 (white on hover), 16 apart.
+        if !a.links.is_empty() {
+            let mut links = div().mt(px(24.)).pt(px(16.)).flex().flex_col().gap(px(16.));
+            for (i, (name, url)) in a.links.iter().enumerate() {
+                let id = SharedString::from(format!("about-link-{i}"));
+                let path = match name.as_str() {
+                    "Instagram" => "icons/instagram24.svg",
+                    "X" => "icons/x24.svg",
+                    _ => "icons/external24.svg",
+                };
+                let url = url.clone();
+                links = links.child(
+                    div()
+                        .id(gpui::ElementId::Name(id.clone()))
+                        .group(id.clone())
+                        .h(px(24.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.))
+                        .cursor_pointer()
+                        .text_size(px(14.))
+                        .line_height(px(19.2))
+                        .text_color(rgba(0xFFFFFFB3))
+                        .hover(|s| s.text_color(c(WHITE)))
+                        .on_click(move |_, _, cx| cx.open_url(&url))
+                        .child(svg().path(path).size(px(24.)).flex_none().text_color(rgba(0xFFFFFFB3)).group_hover(id.clone(), |s| s.text_color(c(WHITE))))
+                        .child(name.clone()),
+                );
+            }
+            stats = stats.child(links);
+        }
         stats = stats.child(
-            div().mt(px(48.)).flex().child(
+            div().mt(px(if a.links.is_empty() { 48. } else { 32. })).flex().child(
                 div()
                     .id("about-report")
                     .group("about-report")
@@ -182,7 +274,7 @@ impl Shell {
 
         // biography: paragraphs with their artist links
         let entity = cx.entity().downgrade();
-        let mut bio = div().mt(px(-4.)).flex_1().min_w_0().flex().flex_col().gap(px(16.));
+        let mut bio = div().mt(px(-4.)).w(px(bio_w)).flex_none().flex().flex_col().gap(px(16.));
         for (pi, (text, links)) in ar::bio_paragraphs(&a.bio).into_iter().enumerate() {
             let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = links
                 .iter()
@@ -326,7 +418,7 @@ impl Shell {
         Some(self.dialog_backdrop(cx).child(dialog).into_any_element())
     }
 
-    fn credits_dialog_el(&self, d: &CreditsDialog, cx: &mut Context<Self>) -> AnyElement {
+    fn credits_dialog_el(&self, d: &CreditsDialog, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let mut body = div().p(px(24.)).flex().flex_col();
         for (gi, (group, credits)) in d.groups.iter().enumerate() {
             let mut g = div()
@@ -335,7 +427,7 @@ impl Shell {
                 .flex_col()
                 .child(div().pb(px(16.)).text_size(px(20.)).line_height(px(24.)).font_weight(FontWeight::BOLD).text_color(c(WHITE)).child(group.clone()));
             for (ci, cr) in credits.iter().enumerate() {
-                g = g.child(self.credit_row(format!("cred-{gi}-{ci}"), cr, cx));
+                g = g.child(self.credit_row(format!("cred-{gi}-{ci}"), cr, 392., window, cx));
             }
             body = body.child(g);
         }
@@ -374,7 +466,8 @@ impl Shell {
         let dialog = div()
             .id("credits-dialog")
             .w(px(440.))
-            .max_h(relative(0.9))
+            .min_h(px(354.))
+            .max_h(px(542.))
             .rounded(px(8.))
             .bg(c(SURFACE))
             .overflow_hidden()

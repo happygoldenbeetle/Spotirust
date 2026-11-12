@@ -53,6 +53,10 @@ pub struct About {
     pub bio: String,
     /// ("London, GB", listeners), most listeners first.
     pub cities: Vec<(String, u64)>,
+    /// "#N in the world" (0 when unranked).
+    pub world_rank: u64,
+    /// Social links as the dialog labels them: ("Instagram", url), ("X", url), ("Wikipedia", url).
+    pub links: Vec<(String, String)>,
 }
 
 impl About {
@@ -68,6 +72,8 @@ pub struct Contributor {
     pub name: String,
     /// `spotify:artist:...` when the contributor has a profile (Follow button, link).
     pub uri: Option<String>,
+    /// A songwriter page (`https://artists.spotify.com/songwriter/...`): an external link instead.
+    pub url: Option<String>,
     /// "Main Artist", "Composer", ...
     pub role: String,
     /// "Artist", "Composition & Lyrics", "Production & Engineering", ...
@@ -82,6 +88,11 @@ pub struct NpvInfo {
     pub contributors: Vec<Contributor>,
     /// Labels / sources ("Ample Play Recordings").
     pub sources: Vec<String>,
+    /// Upcoming concerts (the "On tour" section shows the first).
+    pub concerts: Vec<Concert>,
+    /// The About card's photo and avatar (the artist's VISUAL_IDENTITY_TRAIT; filled in after).
+    pub photo: Option<String>,
+    pub avatar: Option<String>,
 }
 
 pub fn parse_about(a: &Value) -> About {
@@ -127,21 +138,63 @@ pub fn parse_about(a: &Value) -> About {
         gallery,
         bio: str_at(a, "/profile/biography/text").to_owned(),
         cities,
+        world_rank: a.pointer("/stats/worldRank").and_then(Value::as_u64).unwrap_or(0),
+        links: a
+            .pointer("/profile/externalLinks/items")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|l| !str_at(l, "/url").is_empty())
+                    .map(|l| {
+                        let name = match str_at(l, "/name") {
+                            "INSTAGRAM" => "Instagram".to_string(),
+                            "TWITTER" => "X".to_string(),
+                            "WIKIPEDIA" => "Wikipedia".to_string(),
+                            "FACEBOOK" => "Facebook".to_string(),
+                            other => {
+                                let mut c = other.to_lowercase();
+                                if let Some(f) = c.get_mut(0..1) {
+                                    f.make_ascii_uppercase();
+                                }
+                                c
+                            }
+                        };
+                        (name, str_at(l, "/url").to_owned())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
 pub fn parse_npv(v: &Value, track: &str) -> Option<NpvInfo> {
     let a = v.pointer("/data/artistUnion")?;
-    let t = v.pointer("/data/trackUnion");
+    let (contributors, sources) = v.pointer("/data/trackUnion").map(parse_credits).unwrap_or_default();
+    Some(NpvInfo {
+        track: track.to_owned(),
+        about: parse_about(a),
+        contributors,
+        sources,
+        concerts: parse_concerts(a),
+        photo: None,
+        avatar: None,
+    })
+}
+
+/// A `trackUnion`'s credits: contributors (one line per role) and sources.
+pub fn parse_credits(t: &Value) -> (Vec<Contributor>, Vec<String>) {
+    let some = |c: &Value, k: &str| c.get(k).and_then(Value::as_str).filter(|u| !u.is_empty()).map(str::to_owned);
     let contributors = t
-        .and_then(|t| t.pointer("/creditsTrait/contributors/items"))
+        .pointer("/creditsTrait/contributors/items")
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
                 .map(|c| Contributor {
                     name: str_at(c, "/name").to_owned(),
-                    uri: c.get("uri").and_then(Value::as_str).filter(|u| !u.is_empty()).map(str::to_owned),
+                    uri: some(c, "uri"),
+                    url: some(c, "url"),
                     role: str_at(c, "/role").to_owned(),
                     group: str_at(c, "/roleGroup/name").to_owned(),
                 })
@@ -149,11 +202,29 @@ pub fn parse_npv(v: &Value, track: &str) -> Option<NpvInfo> {
         })
         .unwrap_or_default();
     let sources = t
-        .and_then(|t| t.pointer("/creditsTrait/sources/items"))
+        .pointer("/creditsTrait/sources/items")
         .and_then(Value::as_array)
         .map(|items| items.iter().map(|s| str_at(s, "/name").to_owned()).filter(|s| !s.is_empty()).collect())
         .unwrap_or_default();
-    Some(NpvInfo { track: track.to_owned(), about: parse_about(a), contributors, sources })
+    (contributors, sources)
+}
+
+fn parse_concerts(a: &Value) -> Vec<Concert> {
+    a.pointer("/goods/concerts/items")
+        .and_then(Value::as_array)
+        .map(|c| {
+            c.iter()
+                .filter_map(|x| x.get("data"))
+                .map(|d| Concert {
+                    uri: str_at(d, "/uri").to_owned(),
+                    title: str_at(d, "/title").to_owned(),
+                    city: str_at(d, "/location/city").to_owned(),
+                    venue: str_at(d, "/location/name").to_owned(),
+                    start: str_at(d, "/startDateIsoString").to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The biography's paragraphs: each as plain text plus its links (byte range in that text, uri).
@@ -357,22 +428,7 @@ pub fn parse(v: &Value) -> Option<ArtistPage> {
             popular.push(release(r, false));
         }
     }
-    let concerts = a
-        .pointer("/goods/concerts/items")
-        .and_then(Value::as_array)
-        .map(|c| {
-            c.iter()
-                .filter_map(|x| x.get("data"))
-                .map(|d| Concert {
-                    uri: str_at(d, "/uri").to_owned(),
-                    title: str_at(d, "/title").to_owned(),
-                    city: str_at(d, "/location/city").to_owned(),
-                    venue: str_at(d, "/location/name").to_owned(),
-                    start: str_at(d, "/startDateIsoString").to_owned(),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let concerts = parse_concerts(a);
     let header_image = a
         .pointer("/headerImage/data/sources/0/url")
         .and_then(Value::as_str)
