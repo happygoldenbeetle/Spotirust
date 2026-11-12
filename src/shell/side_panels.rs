@@ -75,7 +75,7 @@ impl Shell {
     }
 
     /// Now playing + the rest of its context (from the cached page), as the queue shows them.
-    fn context_queue(&self) -> (Option<Track>, Vec<Track>) {
+    pub(super) fn context_queue(&self) -> (Option<Track>, Vec<Track>) {
         let pb = self.playback.as_ref();
         let now = pb.and_then(|p| p.item.clone());
         let Some(ctx) = pb.and_then(|p| p.context.as_ref()).map(|c| c.uri.clone()) else { return (now, Vec::new()) };
@@ -159,7 +159,7 @@ impl Shell {
     }
 
     /// One queue / recently-played row.
-    fn queue_row(&self, key: String, t: &Track, playing: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn queue_row(&self, key: String, t: &Track, playing: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let group: SharedString = format!("qrow-{key}").into();
         let art = t
             .album

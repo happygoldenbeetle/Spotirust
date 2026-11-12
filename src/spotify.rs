@@ -46,6 +46,7 @@ const WHATS_NEW_HASH: &str = "d889c8c936ab192af8ced595427f5ba2acdf63478fdc0a181c
 const BROWSE_SECTION_HASH: &str = "b13c1cccbfcb6947753c2613411b3566485c21fd5f36d80a80bb64be61ba2d51";
 const USER_TOP_HASH: &str = "61b7353d3625780022dbc63d459eb64cd609e7e5e2a820f9160d65030efe2e15";
 const EXTRACTED_COLORS_HASH: &str = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
+const NPV_ARTIST_HASH: &str = "e1ae46a21911a3075c1aa29bf09a6c60f9a45b6a2b1132429f10ad06c299b5d7";
 const ALBUM_HASH: &str = "0b6ce3511e1b02e4a40fa95440f992acbe85080eb308af9194322d708fc1914f";
 
 pub struct Spotify {
@@ -488,6 +489,25 @@ impl Spotify {
             serde_json::json!({ "uri": artist, "offset": offset, "limit": limit, "order": order }),
         )?;
         dump("discography_all", &v);
+        Ok(v)
+    }
+
+    /// Blocking: what the Now Playing view shows below the cover (`queryNpvArtist`): the track's
+    /// first artist (About the artist) and the track's credits.
+    pub fn npv_artist(&self, artist: &str, track: &str) -> Result<serde_json::Value> {
+        let v = self.pathfinder(
+            "queryNpvArtist",
+            NPV_ARTIST_HASH,
+            serde_json::json!({
+                "artistUri": artist,
+                "trackUri": track,
+                "contributorsLimit": 10,
+                "contributorsOffset": 0,
+                "enableRelatedVideos": false,
+                "enableRelatedAudioTracks": false
+            }),
+        )?;
+        dump("npv_artist", &v);
         Ok(v)
     }
 

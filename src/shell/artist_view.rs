@@ -590,6 +590,10 @@ impl Shell {
             .child(
                 div()
                     .id("ar-about")
+                    .on_click({
+                        let uri = page.uri.clone();
+                        cx.listener(move |this, _, _, cx| this.open_about_for(&uri, cx))
+                    })
                     .mt(px(16.))
                     .relative()
                     .w(px(about_w))

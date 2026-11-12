@@ -534,7 +534,7 @@ impl Shell {
     pub(super) fn toggle_right(&mut self, panel: RightPanel, cx: &mut Context<Self>) {
         self.right_panel = if self.right_panel == panel { RightPanel::None } else { panel };
         match self.right_panel {
-            RightPanel::Queue => self.load_queue(cx),
+            RightPanel::Queue | RightPanel::NowPlaying => self.load_queue(cx),
             RightPanel::Devices => self.load_devices(cx),
             _ => {}
         }

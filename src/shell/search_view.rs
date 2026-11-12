@@ -399,6 +399,8 @@ impl Shell {
     /// Follows / saves (or the reverse) an artist or album from its row.
     pub(super) fn set_hit_saved(&mut self, uri: String, saved: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
+        self.saved_override.insert(uri.clone(), saved);
+        cx.notify();
         let text = if saved { "Added to Your Library." } else { "Removed from Your Library." }.to_string();
         self.background_then(cx, text, move || api.set_in_library(&uri, saved), |this, cx| this.reload_library(cx));
     }

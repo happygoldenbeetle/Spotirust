@@ -144,6 +144,9 @@ impl Shell {
     }
 
     pub(super) fn in_library(&self, uri: &str) -> bool {
+        if let Some(&on) = self.saved_override.get(uri) {
+            return on;
+        }
         self.library_items().iter().any(|i| i.uri == uri)
     }
 

@@ -34,6 +34,157 @@ pub struct ArtistPage {
     pub related: Vec<Item>,
     pub appears_on: Vec<Item>,
     pub saved: bool,
+    /// What the About dialog shows (also built from `queryNpvArtist` for the Now Playing view).
+    pub about: About,
+}
+
+/// An artist's About dialog: gallery, stats, top cities and the biography (with its links).
+#[derive(Clone, Default)]
+pub struct About {
+    pub uri: String,
+    pub name: String,
+    pub verified: bool,
+    pub registered: bool,
+    pub followers: u64,
+    pub monthly_listeners: u64,
+    /// Gallery images, largest rendition each (the About card shows the first).
+    pub gallery: Vec<String>,
+    /// Raw biography: paragraphs split by blank lines, `<a href="spotify:...">name</a>` links.
+    pub bio: String,
+    /// ("London, GB", listeners), most listeners first.
+    pub cities: Vec<(String, u64)>,
+}
+
+impl About {
+    /// The biography as plain text on one line (the cards' 3-line previews).
+    pub fn bio_preview(&self) -> String {
+        crate::home::plain_text(&self.bio).split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+}
+
+/// One credit line in the Now Playing view / Credits dialog.
+#[derive(Clone)]
+pub struct Contributor {
+    pub name: String,
+    /// `spotify:artist:...` when the contributor has a profile (Follow button, link).
+    pub uri: Option<String>,
+    /// "Main Artist", "Composer", ...
+    pub role: String,
+    /// "Artist", "Composition & Lyrics", "Production & Engineering", ...
+    pub group: String,
+}
+
+/// `queryNpvArtist` for the playing track: its first artist and the track's credits.
+#[derive(Clone)]
+pub struct NpvInfo {
+    pub track: String,
+    pub about: About,
+    pub contributors: Vec<Contributor>,
+    /// Labels / sources ("Ample Play Recordings").
+    pub sources: Vec<String>,
+}
+
+pub fn parse_about(a: &Value) -> About {
+    let gallery = a
+        .pointer("/visuals/gallery/items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|it| {
+                    it.get("sources")?
+                        .as_array()?
+                        .iter()
+                        .max_by_key(|x| x.get("width").and_then(Value::as_u64).unwrap_or(0))
+                        .and_then(|s| s.get("url")?.as_str())
+                        .map(str::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let cities = a
+        .pointer("/stats/topCities/items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|c| {
+                    (
+                        format!("{}, {}", str_at(c, "/city"), str_at(c, "/country")),
+                        c.get("numberOfListeners").and_then(Value::as_u64).unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    About {
+        uri: str_at(a, "/uri").to_owned(),
+        name: str_at(a, "/profile/name").to_owned(),
+        verified: a.pointer("/onPlatformReputationTrait/verification/isVerified").and_then(Value::as_bool).unwrap_or(false),
+        registered: a.pointer("/onPlatformReputationTrait/verification/isRegistered").and_then(Value::as_bool).unwrap_or(false),
+        followers: a.pointer("/stats/followers").and_then(Value::as_u64).unwrap_or(0),
+        monthly_listeners: a.pointer("/stats/monthlyListeners").and_then(Value::as_u64).unwrap_or(0),
+        gallery,
+        bio: str_at(a, "/profile/biography/text").to_owned(),
+        cities,
+    }
+}
+
+pub fn parse_npv(v: &Value, track: &str) -> Option<NpvInfo> {
+    let a = v.pointer("/data/artistUnion")?;
+    let t = v.pointer("/data/trackUnion");
+    let contributors = t
+        .and_then(|t| t.pointer("/creditsTrait/contributors/items"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|c| Contributor {
+                    name: str_at(c, "/name").to_owned(),
+                    uri: c.get("uri").and_then(Value::as_str).filter(|u| !u.is_empty()).map(str::to_owned),
+                    role: str_at(c, "/role").to_owned(),
+                    group: str_at(c, "/roleGroup/name").to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let sources = t
+        .and_then(|t| t.pointer("/creditsTrait/sources/items"))
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(|s| str_at(s, "/name").to_owned()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    Some(NpvInfo { track: track.to_owned(), about: parse_about(a), contributors, sources })
+}
+
+/// The biography's paragraphs: each as plain text plus its links (byte range in that text, uri).
+pub fn bio_paragraphs(raw: &str) -> Vec<(String, Vec<(std::ops::Range<usize>, String)>)> {
+    let decode = |s: &str| {
+        s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#x27;", "'").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
+    };
+    let mut out = Vec::new();
+    for para in raw.split("\n\n").map(str::trim).filter(|p| !p.is_empty()) {
+        let mut text = String::new();
+        let mut links = Vec::new();
+        let mut rest = para;
+        while let Some(i) = rest.find("<a ") {
+            text.push_str(&decode(&rest[..i]));
+            let tag = &rest[i..];
+            let Some(close) = tag.find('>') else { break };
+            let href = tag[..close].split("href=\"").nth(1).and_then(|h| h.split('"').next()).unwrap_or_default().to_owned();
+            let after = &tag[close + 1..];
+            let end = after.find("</a>").unwrap_or(after.len());
+            let label = decode(&after[..end]);
+            let start = text.len();
+            text.push_str(&label);
+            if !href.is_empty() {
+                links.push((start..text.len(), href));
+            }
+            rest = after.get(end + 4..).unwrap_or_default();
+        }
+        text.push_str(&crate::home::plain_text(rest));
+        out.push((text.replace('\n', " "), links));
+    }
+    out
 }
 
 #[derive(Clone)]
@@ -270,6 +421,7 @@ pub fn parse(v: &Value) -> Option<ArtistPage> {
             .unwrap_or_default(),
         appears_on: releases(a.pointer("/relatedContent/appearsOn/items")),
         saved: a.get("saved").and_then(Value::as_bool).unwrap_or(false),
+        about: parse_about(a),
     })
 }
 

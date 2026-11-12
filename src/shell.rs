@@ -39,6 +39,8 @@ mod lib_chips;
 mod genre_view;
 mod whats_new;
 mod disco_view;
+mod npv_sections;
+mod about_dialog;
 mod fx;
 
 use std::collections::{HashMap, HashSet};
@@ -140,6 +142,15 @@ pub struct Shell {
     new_filter: Option<whats_new::NewFilter>,
     /// Loaded discography pages by artist URI.
     disco_pages: HashMap<String, disco_view::DiscoPage>,
+    /// Now Playing view below the cover: About the artist + Credits for the playing track.
+    npv: Option<ar::NpvInfo>,
+    /// Track uri whose `queryNpvArtist` is in flight.
+    npv_loading: Option<String>,
+    about_dialog: Option<about_dialog::AboutDialog>,
+    credits_dialog: Option<about_dialog::CreditsDialog>,
+    /// Follow / save changes made here, until the library reload that reflects them.
+    saved_override: HashMap<String, bool>,
+    about_scroll: gpui::ScrollHandle,
     disco_prefs: disco_view::DiscoPrefs,
     disco_menu: Option<disco_view::DiscoMenu>,
     disco_menu_last: Option<disco_view::DiscoMenu>,
@@ -451,6 +462,12 @@ impl Shell {
             whats_new: None,
             new_filter: None,
             disco_pages: HashMap::new(),
+            npv: None,
+            npv_loading: None,
+            about_dialog: None,
+            credits_dialog: None,
+            saved_override: HashMap::new(),
+            about_scroll: gpui::ScrollHandle::new(),
             disco_prefs: Default::default(),
             disco_menu: None,
             disco_menu_last: None,
@@ -542,6 +559,7 @@ impl Shell {
             let _ = this.update(cx, |this, cx| match result {
                 Ok(items) => {
                     this.library = Some(items);
+                    this.saved_override.clear();
                     this.resolve_mosaics(cx);
                     cx.notify();
                 }
@@ -596,6 +614,12 @@ impl Shell {
                         }
                         if let Err(e) = sp.browse_all() {
                             eprintln!("dump browse: {e:#}");
+                        }
+                    }
+                    // Debug: SPOTIRUST_DUMP_NPV="<artist uri>|<track uri>" (with SPOTIRUST_DUMP).
+                    if let Some((a, t)) = std::env::var("SPOTIRUST_DUMP_NPV").ok().as_deref().and_then(|s| s.split_once('|')) {
+                        if let Err(e) = sp.npv_artist(a, t) {
+                            eprintln!("dump npv: {e:#}");
                         }
                     }
                     if let Ok(uri) = std::env::var("SPOTIRUST_DUMP_ARTIST") {
@@ -1104,6 +1128,12 @@ impl Shell {
             return;
         }
         let pb = self.playback.clone();
+        if k.key == "escape" && (self.about_dialog.is_some() || self.credits_dialog.is_some()) && self.ctx_menu.is_none() {
+            self.about_dialog = None;
+            self.credits_dialog = None;
+            cx.notify();
+            return;
+        }
         if k.key == "escape" && (self.lib_menu || self.create_open || self.profile_open || self.ctx_menu.is_some() || self.disco_menu.is_some()) {
             self.ctx_menu = None;
             self.disco_menu = None;
@@ -1572,12 +1602,13 @@ impl Shell {
         self.refresh_saved(cx);
         let (Some(track), Some(sp)) = (pb.item.as_ref(), self.spotify.clone()) else { return };
         let Some(id) = track.id.clone() else { return };
+        self.load_npv(track.uri.clone(), track.artists.first().map(|a| a.uri.clone()).unwrap_or_default(), cx);
         if self.lyrics.as_ref().map(|l| l.0.as_str()) == Some(id.as_str()) {
             return;
         }
         let image = track.album.as_ref().and_then(|a| api::pick_image(&a.images, 640)).map(|i| i.url.clone()).unwrap_or_default();
-        // The queue panel follows the playing track.
-        if self.right_panel == RightPanel::Queue {
+        // The queue panel (and the Now Playing view's "Next in queue") follow the playing track.
+        if matches!(self.right_panel, RightPanel::Queue | RightPanel::NowPlaying) {
             self.load_queue(cx);
         }
         self.lyrics = Some((id.clone(), None));
@@ -2826,6 +2857,7 @@ impl Shell {
         let lyrics = self.lyrics.as_ref().and_then(|l| l.1.clone());
         let saved = self.is_saved();
         let inner_w = self.right_w - 32.;
+        let sections = self.npv_sections(inner_w, lyrics.is_some(), cx);
 
         let header_button = |id: &'static str, path: &'static str| {
             round_button(id, 32.).group(id).child(
@@ -2975,6 +3007,7 @@ impl Shell {
                                 .child(div().mt(px(16.)).flex().flex_col().gap(px(14.4)).children(lines)),
                         )
                     })
+                    .children(sections)
                     .child(div().h(px(16.)).flex_none()),
             )
     }
@@ -3214,10 +3247,28 @@ impl Render for Shell {
                         ),
                 )
             })
+            .children(self.about_dialog_view(window, cx))
             .children(self.add_popover_view(window, cx))
             .children(self.cinema_view(window, cx))
             .children(self.bar_tooltip(vw))
+            .when_some(mouse_file(), |d, path| {
+                // Test harness: where each pointer move lands (logical px), whatever is on top, so
+                // posted clicks can check the window's input scale first.
+                d.child(canvas(|_, _, _| {}, move |_, _, window, _| {
+                    let path = path.clone();
+                    window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, _| {
+                        if phase == gpui::DispatchPhase::Capture {
+                            let _ = std::fs::write(&path, format!("{} {}", f32::from(ev.position.x), f32::from(ev.position.y)));
+                        }
+                    });
+                }))
+            })
     }
+}
+
+fn mouse_file() -> Option<std::ffi::OsString> {
+    static MOUSE_FILE: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    MOUSE_FILE.get_or_init(|| std::env::var_os("SPOTIRUST_MOUSE_FILE")).clone()
 }
 
 impl Shell {
