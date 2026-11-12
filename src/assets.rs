@@ -22,7 +22,7 @@ embedded!(
     "icons/external.svg",
     "icons/mark_bars.svg",
     "icons/back.svg", "icons/forward.svg", "icons/home_filled.svg", "icons/home.svg",
-    "icons/search.svg", "icons/browse.svg", "icons/bell.svg", "icons/friends.svg",
+    "icons/search.svg", "icons/browse.svg", "icons/bell.svg", "icons/bell_active.svg", "icons/friends.svg",
     "icons/plus.svg", "icons/expand.svg", "icons/list.svg", "icons/note.svg", "icons/heart.svg",
     "icons/pin.svg", "icons/shuffle.svg", "icons/prev.svg", "icons/next.svg", "icons/play.svg",
     "icons/pause.svg", "icons/repeat.svg", "icons/add_circle.svg", "icons/check_circle.svg",

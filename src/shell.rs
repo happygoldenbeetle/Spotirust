@@ -37,6 +37,7 @@ mod section_view;
 mod lib_find;
 mod lib_chips;
 mod genre_view;
+mod whats_new;
 mod fx;
 
 use std::collections::{HashMap, HashSet};
@@ -133,6 +134,9 @@ pub struct Shell {
     section_pages: HashMap<String, home::Shelf>,
     /// Loaded Browse category pages by URI.
     genre_pages: HashMap<String, genre_view::GenrePage>,
+    /// What's New: the loaded feed and the picked chip.
+    whats_new: Option<whats_new::NewFeed>,
+    new_filter: Option<whats_new::NewFilter>,
     user_pages: HashMap<String, UserPage>,
     /// The search box and its dropdown.
     search: search_view::SearchUi,
@@ -243,6 +247,8 @@ pub enum Page {
     Section(String, String),
     /// A Browse category (`/genre/<id>`): its `spotify:page:` URI.
     Genre(String),
+    /// What's New (the bell, `/content-feed`).
+    WhatsNew,
 }
 
 impl Page {
@@ -432,6 +438,8 @@ impl Shell {
             artist_pages: HashMap::new(),
             section_pages: HashMap::new(),
             genre_pages: HashMap::new(),
+            whats_new: None,
+            new_filter: None,
             user_pages: HashMap::new(),
             search: search_view::SearchUi::new(),
             search_pages: HashMap::new(),
@@ -1276,6 +1284,7 @@ impl Shell {
             Page::Browse => self.load_browse(cx),
             Page::Section(uri, _) => self.load_section(uri, cx),
             Page::Genre(uri) => self.load_genre(uri, cx),
+            Page::WhatsNew => self.load_whats_new(cx),
             Page::Home | Page::Lyrics => {}
         }
         cx.notify();
@@ -1800,7 +1809,16 @@ impl Shell {
                     .items_center()
                     .gap(px(8.))
                     .child(self.on_fade(
-                        round_button("whats-new", 32.).occlude().child(tert("whats-new", "icons/bell.svg", 16., true)),
+                        round_button("whats-new", 32.)
+                            .occlude()
+                            .on_click(cx.listener(|this, _, _, cx| this.open(Page::WhatsNew, cx)))
+                            // filled and white while the page is open
+                            .child(if self.page == Page::WhatsNew {
+                                let t = self.fades.get("whats-new");
+                                fx::scaled_icon("icons/bell_active.svg", 16., 1. + 0.04 * t).text_color(c(WHITE)).into_any_element()
+                            } else {
+                                tert("whats-new", "icons/bell.svg", 16., true).into_any_element()
+                            }),
                         "whats-new",
                         fx::TERTIARY,
                         cx,
@@ -3125,6 +3143,7 @@ impl Render for Shell {
                             Page::Search(query, filter) => self.search_view(&query, filter, main_w, window, cx),
                             Page::Section(uri, title) => self.section_view(&uri, &title, main_w, cx),
                             Page::Genre(uri) => self.genre_view(&uri, main_w, window, cx),
+                            Page::WhatsNew => self.whats_new_view(main_w, cx),
                         };
                         // GPUI clips children to the panel's rectangle, not its 8px rounded corners, so
                         // full-bleed content (sticky header, About image) would square them off: mask

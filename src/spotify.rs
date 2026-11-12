@@ -40,6 +40,7 @@ const SEARCH_AUTHORS_HASH: &str = "4a9d403a7cbc7e19da5520d619a865472b35382b043bf
 const RECENT_SEARCHES_HASH: &str = "ece96d7b82c820fb9938dd1df50dee3e53737d808c3883e3d01c467c423601b0";
 const BROWSE_ALL_HASH: &str = "dbd8b55e09a58afc52eab438bc228ba28fd72ac2f2148c6c26354980e4579001";
 const BROWSE_PAGE_HASH: &str = "f5c4e6d668f5716464a231c1cc8b22c1cbf6ad68b09929fd7de813a30581298b";
+const WHATS_NEW_HASH: &str = "d889c8c936ab192af8ced595427f5ba2acdf63478fdc0a181c8d477f8322630e";
 const BROWSE_SECTION_HASH: &str = "b13c1cccbfcb6947753c2613411b3566485c21fd5f36d80a80bb64be61ba2d51";
 const USER_TOP_HASH: &str = "61b7353d3625780022dbc63d459eb64cd609e7e5e2a820f9160d65030efe2e15";
 const EXTRACTED_COLORS_HASH: &str = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
@@ -466,6 +467,24 @@ impl Spotify {
             }),
         )?;
         dump("browse_page", &v);
+        Ok(v)
+    }
+
+    /// Blocking: What's New (the bell): 50 newest releases, optionally only ALBUM or EPISODE.
+    pub fn whats_new(&self, content_type: Option<&str>) -> Result<serde_json::Value> {
+        let types: Vec<&str> = content_type.into_iter().collect();
+        let v = self.pathfinder(
+            "queryWhatsNewFeed",
+            WHATS_NEW_HASH,
+            serde_json::json!({
+                "offset": 0,
+                "limit": 50,
+                "onlyUnPlayedItems": false,
+                "includedContentTypes": types,
+                "includeEpisodeContentRatingsV2": true
+            }),
+        )?;
+        dump("whats_new", &v);
         Ok(v)
     }
 

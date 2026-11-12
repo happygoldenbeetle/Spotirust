@@ -92,6 +92,11 @@ fn plain(text: &str) -> String {
         .replace("&lt;", "<").replace("&gt;", ">")
 }
 
+/// One `{ uri, content: { data } }` entry as a card (shared with other feeds).
+pub fn parse_item(entry: &Value) -> Option<Item> {
+    item(entry)
+}
+
 fn item(entry: &Value) -> Option<Item> {
     let uri = entry.get("uri")?.as_str()?.to_string();
     let content = entry.get("content")?;
