@@ -2506,13 +2506,13 @@ impl Interactivity {
             if let Some(in_focus_style) = self.in_focus_style.as_ref()
                 && focus_handle.within_focused(window, cx)
             {
-                style.refine(in_focus_style);
+                refine_merging_text(&mut style, in_focus_style);
             }
 
             if let Some(focus_style) = self.focus_style.as_ref()
                 && focus_handle.is_focused(window)
             {
-                style.refine(focus_style);
+                refine_merging_text(&mut style, focus_style);
             }
         }
 
@@ -2530,12 +2530,12 @@ impl Interactivity {
             if state.last_hover.0
                 && let Some(group_hover) = self.group_hover_style.as_ref()
             {
-                style.refine(&text_only(&group_hover.style));
+                refine_merging_text(&mut style, &text_only(&group_hover.style));
             }
             if state.last_hover.1
                 && let Some(hover_style) = self.hover_style.as_ref()
             {
-                style.refine(&text_only(hover_style));
+                refine_merging_text(&mut style, &text_only(hover_style));
             }
         }
 
@@ -2545,14 +2545,14 @@ impl Interactivity {
                     GroupHitboxes::get(&group_hover.group, cx).is_some_and(|id| id.is_hovered(window))
                 });
                 if group_hovered && let Some(group_hover) = self.group_hover_style.as_ref() {
-                    style.refine(&group_hover.style);
+                    refine_merging_text(&mut style, &group_hover.style);
                 }
 
                 let hovered = self.hover_style.is_some() && hitbox.is_hovered(window);
                 if let Some(hover_style) = self.hover_style.as_ref()
                     && hovered
                 {
-                    style.refine(hover_style);
+                    refine_merging_text(&mut style, hover_style);
                 }
                 if let Some(state) = element_state.as_deref_mut() {
                     state.last_hover = (group_hovered, hovered);
@@ -2572,14 +2572,14 @@ impl Interactivity {
                             && *state_type == drag.value.as_ref().type_id()
                             && group_hitbox_id.is_hovered(window)
                         {
-                            style.refine(&group_drag_style.style);
+                            refine_merging_text(&mut style, &group_drag_style.style);
                         }
                     }
 
                     for (state_type, build_drag_over_style) in &self.drag_over_styles {
                         if *state_type == drag.value.as_ref().type_id() && hitbox.is_hovered(window)
                         {
-                            style.refine(&build_drag_over_style(drag.value.as_ref(), window, cx));
+                            refine_merging_text(&mut style, &build_drag_over_style(drag.value.as_ref(), window, cx));
                         }
                     }
                 }
@@ -2597,13 +2597,13 @@ impl Interactivity {
             if clicked_state.group
                 && let Some(group) = self.group_active_style.as_ref()
             {
-                style.refine(&group.style)
+                refine_merging_text(&mut style, &group.style)
             }
 
             if let Some(active_style) = self.active_style.as_ref()
                 && clicked_state.element
             {
-                style.refine(active_style)
+                refine_merging_text(&mut style, active_style)
             }
         }
 
@@ -3371,4 +3371,20 @@ fn smooth_step(cell: &Rc<RefCell<Point<Pixels>>>, offset: &mut Point<Pixels>, ma
             true
         }
     })
+}
+
+/// Applies a state style (hover, active, focus, drag) on top of `style`, merging its text part into
+/// the element's own text style the way CSS does. A plain `refine` replaces the whole text style, so
+/// `.hover(|s| s.underline())` on a 32px bold title used to drop it back to the inherited font.
+fn refine_merging_text(style: &mut Style, refinement: &StyleRefinement) {
+    match &refinement.text {
+        Some(text) => {
+            let mut merged = style.text.clone();
+            merged.refine(text);
+            let mut r = refinement.clone();
+            r.text = Some(merged);
+            style.refine(&r);
+        }
+        None => style.refine(refinement),
+    }
 }

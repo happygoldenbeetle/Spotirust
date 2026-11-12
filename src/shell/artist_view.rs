@@ -501,7 +501,13 @@ impl Shell {
                 .mt(px(40.))
                 .flex()
                 .flex_col()
-                .child(shelf_head("disco", "Discography".into(), Some("Show all".into())))
+                .child({
+                    let page = Page::Discography(uri.to_string());
+                    div()
+                        .id("disco-head")
+                        .on_click(cx.listener(move |this, _, _, cx| this.open(page.clone(), cx)))
+                        .child(shelf_head("disco", "Discography".into(), Some("Show all".into())))
+                })
                 .child(div().id("disco-chips").mt(px(16.)).px(px(16.)).flex().flex_row().gap(px(8.)).overflow_x_scroll().children(chips))
                 .child(cards(self, "disco", disco_items, cx).mt(px(16.)))
         });

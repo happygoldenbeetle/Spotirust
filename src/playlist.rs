@@ -74,6 +74,8 @@ pub struct Track {
     /// Album pages number rows by track number and split them by disc.
     pub disc: u32,
     pub number: u32,
+    /// Play count (discography tracklists show it), when known.
+    pub plays: Option<u64>,
 }
 
 fn color(v: Option<&Value>) -> Option<u32> {
@@ -184,6 +186,7 @@ pub fn parse_items(v: &Value) -> Vec<Track> {
                 added_at: it.pointer("/addedAt/isoString").and_then(Value::as_str).and_then(parse_iso),
                 disc: 1,
                 number: 0,
+                plays: None,
             })
         })
         .collect()
@@ -387,6 +390,7 @@ pub fn parse_album_items(v: &Value) -> Vec<Track> {
                 added_at: None,
                 disc: t.get("discNumber").and_then(Value::as_u64).unwrap_or(1) as u32,
                 number: t.get("trackNumber").and_then(Value::as_u64).unwrap_or(0) as u32,
+                plays: None,
             })
         })
         .collect()
@@ -426,6 +430,7 @@ pub fn liked_page(api: &crate::api::Api, me: &crate::api::Me) -> anyhow::Result<
                 added_at: it.get("added_at").and_then(Value::as_str).and_then(parse_iso),
                 disc: 1,
                 number: 0,
+                plays: None,
             });
         }
         next = page.get("next").and_then(Value::as_str).map(str::to_owned);

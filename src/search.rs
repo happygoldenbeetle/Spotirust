@@ -149,6 +149,7 @@ impl Hit {
             added_at: None,
             disc: 0,
             number: 0,
+            plays: None,
         }
     }
 

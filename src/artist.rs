@@ -183,6 +183,7 @@ pub fn parse(v: &Value) -> Option<ArtistPage> {
                         added_at: None,
                         disc: 1,
                         number: 0,
+                        plays: None,
                     })
                 })
                 .collect()

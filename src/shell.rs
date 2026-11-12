@@ -38,6 +38,7 @@ mod lib_find;
 mod lib_chips;
 mod genre_view;
 mod whats_new;
+mod disco_view;
 mod fx;
 
 use std::collections::{HashMap, HashSet};
@@ -137,6 +138,8 @@ pub struct Shell {
     /// What's New: the loaded feed and the picked chip.
     whats_new: Option<whats_new::NewFeed>,
     new_filter: Option<whats_new::NewFilter>,
+    /// Loaded discography pages by artist URI.
+    disco_pages: HashMap<String, disco_view::DiscoPage>,
     user_pages: HashMap<String, UserPage>,
     /// The search box and its dropdown.
     search: search_view::SearchUi,
@@ -249,6 +252,8 @@ pub enum Page {
     Genre(String),
     /// What's New (the bell, `/content-feed`).
     WhatsNew,
+    /// An artist's full discography (`/artist/<id>/discography/all`): the artist URI.
+    Discography(String),
 }
 
 impl Page {
@@ -257,6 +262,8 @@ impl Page {
         match uri.split(':').nth(1)? {
             "playlist" => Some(Self::Playlist(uri.to_string())),
             "album" => Some(Self::Album(uri.to_string())),
+            // test hook: `spotify:artist:<id>:discography`
+            "artist" if uri.ends_with(":discography") => Some(Self::Discography(uri.trim_end_matches(":discography").to_string())),
             "artist" => Some(Self::Artist(uri.to_string())),
             "collection" => Some(Self::Liked),
             "user" if uri.ends_with(":collection") || uri.ends_with(":collection:tracks") => Some(Self::Liked),
@@ -440,6 +447,7 @@ impl Shell {
             genre_pages: HashMap::new(),
             whats_new: None,
             new_filter: None,
+            disco_pages: HashMap::new(),
             user_pages: HashMap::new(),
             search: search_view::SearchUi::new(),
             search_pages: HashMap::new(),
@@ -1285,6 +1293,7 @@ impl Shell {
             Page::Section(uri, _) => self.load_section(uri, cx),
             Page::Genre(uri) => self.load_genre(uri, cx),
             Page::WhatsNew => self.load_whats_new(cx),
+            Page::Discography(uri) => self.load_disco(uri, cx),
             Page::Home | Page::Lyrics => {}
         }
         cx.notify();
@@ -3144,6 +3153,7 @@ impl Render for Shell {
                             Page::Section(uri, title) => self.section_view(&uri, &title, main_w, cx),
                             Page::Genre(uri) => self.genre_view(&uri, main_w, window, cx),
                             Page::WhatsNew => self.whats_new_view(main_w, cx),
+                            Page::Discography(uri) => self.disco_view(&uri, main_w, window, cx),
                         };
                         // GPUI clips children to the panel's rectangle, not its 8px rounded corners, so
                         // full-bleed content (sticky header, About image) would square them off: mask

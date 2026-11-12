@@ -715,6 +715,10 @@ impl Shell {
                         .child(
                             div()
                                 .id("album-discography")
+                                .when(!page.owner_uri.is_empty(), |d| {
+                                    let page = Page::Discography(page.owner_uri.clone());
+                                    d.on_click(cx.listener(move |this, _, _, cx| this.open(page.clone(), cx)))
+                                })
                                 .pb(px(1.))
                                 .flex_none()
                                 .text_size(px(14.))
@@ -922,7 +926,15 @@ impl Shell {
                             ),
                     ),
             );
-        for (k, vw) in var_ws.iter().enumerate() {
+        // discography tracklists: the one middle column is the play count, right-aligned in 100px
+        if let (Some(n), [vw]) = (t.plays, var_ws) {
+            row = row.child(
+                div().w(px(*vw)).flex_none().child(
+                    div().w(px(100.)).flex().justify_end().text_size(px(14.)).line_height(px(19.2)).text_color(c(TEXT_SUBDUED)).child(super::disco_view::plays_text(n)),
+                ),
+            );
+        }
+        for (k, vw) in var_ws.iter().enumerate().filter(|_| t.plays.is_none()) {
             let text = match k {
                 0 => t.album.clone(),
                 _ => t.added_at.map(|a| playlist::date_added(a, now)).unwrap_or_default(),

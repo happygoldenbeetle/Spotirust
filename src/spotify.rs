@@ -40,6 +40,8 @@ const SEARCH_AUTHORS_HASH: &str = "4a9d403a7cbc7e19da5520d619a865472b35382b043bf
 const RECENT_SEARCHES_HASH: &str = "ece96d7b82c820fb9938dd1df50dee3e53737d808c3883e3d01c467c423601b0";
 const BROWSE_ALL_HASH: &str = "dbd8b55e09a58afc52eab438bc228ba28fd72ac2f2148c6c26354980e4579001";
 const BROWSE_PAGE_HASH: &str = "f5c4e6d668f5716464a231c1cc8b22c1cbf6ad68b09929fd7de813a30581298b";
+const DISCOGRAPHY_HASH: &str = "5e07d323febb57b4a56a42abbf781490e58764aa45feb6e3dc0591564fc56599";
+const ALBUM_TRACKS_HASH: &str = "0b6ce3511e1b02e4a40fa95440f992acbe85080eb308af9194322d708fc1914f";
 const WHATS_NEW_HASH: &str = "d889c8c936ab192af8ced595427f5ba2acdf63478fdc0a181c8d477f8322630e";
 const BROWSE_SECTION_HASH: &str = "b13c1cccbfcb6947753c2613411b3566485c21fd5f36d80a80bb64be61ba2d51";
 const USER_TOP_HASH: &str = "61b7353d3625780022dbc63d459eb64cd609e7e5e2a820f9160d65030efe2e15";
@@ -468,6 +470,27 @@ impl Spotify {
         )?;
         dump("browse_page", &v);
         Ok(v)
+    }
+
+    /// Blocking: an artist's discography totals and name (`queryArtistDiscographyOverview`).
+    pub fn discography_overview(&self, artist: &str) -> Result<serde_json::Value> {
+        self.pathfinder("queryArtistDiscographyOverview", DISCOGRAPHY_HASH, serde_json::json!({ "uri": artist }))
+    }
+
+    /// Blocking: one page of an artist's releases, newest first (`queryArtistDiscographyAll`).
+    pub fn discography_all(&self, artist: &str, offset: usize, limit: usize) -> Result<serde_json::Value> {
+        let v = self.pathfinder(
+            "queryArtistDiscographyAll",
+            DISCOGRAPHY_HASH,
+            serde_json::json!({ "uri": artist, "offset": offset, "limit": limit, "order": "DATE_DESC" }),
+        )?;
+        dump("discography_all", &v);
+        Ok(v)
+    }
+
+    /// Blocking: an album's tracks with play counts (`queryAlbumTracks`).
+    pub fn album_tracks(&self, album: &str) -> Result<serde_json::Value> {
+        self.pathfinder("queryAlbumTracks", ALBUM_TRACKS_HASH, serde_json::json!({ "uri": album, "offset": 0, "limit": 300 }))
     }
 
     /// Blocking: What's New (the bell): 50 newest releases, optionally only ALBUM or EPISODE.
