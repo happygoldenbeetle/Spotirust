@@ -215,6 +215,10 @@ pub struct Shell {
     lyrics_scroll: lyrics_view::LyricsScroll,
     /// The Lyrics card in Now Playing (expanded or not, and its scroll).
     npv_lyr: npv_lyrics::NpvLyr,
+    /// The cinema view (Page::Lyrics): which media it shows.
+    cinema_mode: lyrics_view::CinemaMode,
+    /// The playing cover's colour set as the cinema view's gradient (from, to), by track id.
+    cinema_colors: Option<(String, u32, u32)>,
     miniplayer: Option<gpui::WindowHandle<miniplayer::MiniPlayer>>,
     /// Full screen (cinema) view on.
     cinema: bool,
@@ -511,6 +515,8 @@ impl Shell {
             devices: None,
             lyrics_scroll: Default::default(),
             npv_lyr: Default::default(),
+            cinema_mode: Default::default(),
+            cinema_colors: None,
             miniplayer: None,
             cinema: false,
             mini_debug_done: false,
@@ -1624,15 +1630,23 @@ impl Shell {
                 .background_executor()
                 .spawn(async move {
                     let colors = sp.dynamic_colors(&image).ok();
-                    sp.lyrics(&tid, &image).map(|l| l.map(|l| (l, colors)))
+                    (sp.lyrics(&tid, &image), colors)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.lyrics.as_ref().map(|l| l.0.as_str()) != Some(id.as_str()) {
                     return;
                 }
+                let (result, colors) = result;
+                // The cinema view's --cinema-mode-bg-color-from / -to.
+                let rgb = |set: &str| {
+                    let c = colors.as_ref()?.pointer(&format!("/data/dynamicColors/0/dark/{set}/backgroundBase"))?;
+                    let ch = |n: &str| c.get(n).and_then(|x| x.as_u64()).map(|x| x as u32);
+                    Some(ch("red")? << 16 | ch("green")? << 8 | ch("blue")?)
+                };
+                this.cinema_colors = rgb("highContrast").zip(rgb("higherContrast")).map(|(a, b)| (id.clone(), a, b));
                 match result {
-                    Ok(Some((v, colors))) => {
+                    Ok(Some(v)) => {
                         this.lyrics = Some((id, Lyrics::parse(&v, colors.as_ref())));
                     }
                     Ok(None) => {}
@@ -2905,7 +2919,10 @@ impl Shell {
                                     .text_color(c(WHITE)),
                             )
                             .child(header_button("npv-more", "icons/more.svg"))
-                            .child(header_button("npv-expand", "icons/expand_panel.svg")),
+                            .child(
+                                header_button("npv-expand", "icons/expand_panel.svg")
+                                    .on_click(cx.listener(|this, _, _, cx| this.open_cinema(lyrics_view::CinemaMode::Artwork, cx))),
+                            ),
                     )
                     .when_some(track, |d, t| {
                         d.child(cover(art_url.as_deref(), inner_w, 8., cx))
@@ -3056,8 +3073,8 @@ impl Render for Shell {
         }
         let vw = f32::from(window.viewport_size().width);
         let lyrics_open = self.page == Page::Lyrics;
-        let right_open = self.right_panel != RightPanel::None;
-        // The lyrics view takes Your Library's place too.
+        // The cinema view (Page::Lyrics) takes Your Library's and the right panel's place too.
+        let right_open = self.right_panel != RightPanel::None && !lyrics_open;
         let left_w = if lyrics_open { -8. } else if self.left_collapsed { LEFT_RAIL } else { self.left_w };
         let right_w = if right_open { self.right_w + 8. } else { 0. };
         // main view = viewport - outer gutters (8+8) - sidebars - resize gaps (8 each)
@@ -3182,6 +3199,7 @@ impl Render for Shell {
                     })
                     .when(right_open, |d| d.child(self.resize_bar(Side::Right, cx)))
                     .children(match self.right_panel {
+                        _ if !right_open => None,
                         RightPanel::None => None,
                         RightPanel::NowPlaying => Some(self.now_playing_panel(window, cx).into_any_element()),
                         RightPanel::Friends => Some(self.friends_panel(cx).into_any_element()),
