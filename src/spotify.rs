@@ -478,11 +478,14 @@ impl Spotify {
     }
 
     /// Blocking: one page of an artist's releases, newest first (`queryArtistDiscographyAll`).
-    pub fn discography_all(&self, artist: &str, offset: usize, limit: usize) -> Result<serde_json::Value> {
+    /// `which` is All / Albums / Singles / Compilations (the response is under
+    /// `/data/artistUnion/discography/<which lowercased>`), `order` DATE_DESC / DATE_ASC /
+    /// NAME_DESC / NAME_ASC.
+    pub fn discography(&self, artist: &str, which: &str, order: &str, offset: usize, limit: usize) -> Result<serde_json::Value> {
         let v = self.pathfinder(
-            "queryArtistDiscographyAll",
+            &format!("queryArtistDiscography{which}"),
             DISCOGRAPHY_HASH,
-            serde_json::json!({ "uri": artist, "offset": offset, "limit": limit, "order": "DATE_DESC" }),
+            serde_json::json!({ "uri": artist, "offset": offset, "limit": limit, "order": order }),
         )?;
         dump("discography_all", &v);
         Ok(v)

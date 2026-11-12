@@ -140,6 +140,9 @@ pub struct Shell {
     new_filter: Option<whats_new::NewFilter>,
     /// Loaded discography pages by artist URI.
     disco_pages: HashMap<String, disco_view::DiscoPage>,
+    disco_prefs: disco_view::DiscoPrefs,
+    disco_menu: Option<disco_view::DiscoMenu>,
+    disco_menu_last: Option<disco_view::DiscoMenu>,
     user_pages: HashMap<String, UserPage>,
     /// The search box and its dropdown.
     search: search_view::SearchUi,
@@ -448,6 +451,9 @@ impl Shell {
             whats_new: None,
             new_filter: None,
             disco_pages: HashMap::new(),
+            disco_prefs: Default::default(),
+            disco_menu: None,
+            disco_menu_last: None,
             user_pages: HashMap::new(),
             search: search_view::SearchUi::new(),
             search_pages: HashMap::new(),
@@ -1098,8 +1104,9 @@ impl Shell {
             return;
         }
         let pb = self.playback.clone();
-        if k.key == "escape" && (self.lib_menu || self.create_open || self.profile_open || self.ctx_menu.is_some()) {
+        if k.key == "escape" && (self.lib_menu || self.create_open || self.profile_open || self.ctx_menu.is_some() || self.disco_menu.is_some()) {
             self.ctx_menu = None;
+            self.disco_menu = None;
             self.lib_menu = false;
             self.create_open = false;
             self.profile_open = false;

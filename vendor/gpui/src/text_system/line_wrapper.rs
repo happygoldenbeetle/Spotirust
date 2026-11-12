@@ -185,6 +185,9 @@ impl LineWrapper {
         // e.g. `a-b`, `var_name`, `I'm`, '@mention`, `#hashtag`, `100%`, `3.1415`,
         // `2^3`, `a~b`, `a=1`, `Self::new`, etc.
         matches!(c, '-' | '_' | '.' | '\'' | '$' | '%' | '@' | '#' | '^' | '~' | ',' | '=' | ':') ||
+        // Like a browser's line breaking: never break before closing punctuation or after an
+        // opening bracket, so `(Radio Edit)` doesn't leave `)` alone on the next line.
+        matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '!' | '?' | ';' | '"' | '\u{2019}' | '\u{201D}' | '\u{2026}') ||
         // `⋯` character is special used in Zed, to keep this at the end of the line.
         matches!(c, '⋯')
     }

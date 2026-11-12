@@ -8,8 +8,18 @@
 //!   title 32/700 (line 38.4), 8 below "Single • 2026 • 1 song" 14px rgba(255,255,255,.7); 96 below
 //!   the top a 32px white play button, then save / download / more (24px, 16 apart). 32 below the
 //!   cover the album tracklist (# · Title 2fr · Plays 1fr · duration 120) and 64 below it the next.
-//!   Data: `queryArtistDiscographyOverview`, `queryArtistDiscographyAll` (20 at a time, newest first)
-//!   and `queryAlbumTracks` per release.
+//!   Data: `queryArtistDiscographyOverview` (name + how many albums / singles / compilations),
+//!   `queryArtistDiscography{All,Albums,Singles,Compilations}` (20 at a time, order DATE_DESC /
+//!   DATE_ASC / NAME_DESC / NAME_ASC) and `queryAlbumTracks` per release.
+//!   Menus (#282828, 160 wide, padding 4, radius 4, the context-menu shadow), 8 below the buttons:
+//!   the filter's left-aligned with it (All, then Albums / Singles and EPs / Compilations when the
+//!   artist has any; the picked one green with a check); the sort's right edge 3.2 past the
+//!   button's ("Sort by": Release date / Name, the picked one green with a down arrow when
+//!   descending, up when ascending, picking it again flips it, a new one starts descending;
+//!   "View as": List / Grid with their icons). Picking closes the menu. The filter button turns
+//!   white at once on hover or while open (its caret flips up); the sort button fades to white
+//!   (0.05s in / 0.15s out) and its icon is the view's. Grid: cards in columns of at least 180 from
+//!   104 down, 12 inside the content spacing, subtitle "2025 • Single".
 
 use super::browse_view::content_spacing;
 use super::playlist_view::text_width;
@@ -27,18 +37,91 @@ pub struct Release {
     pub tracks: Option<Vec<Track>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DiscoFilter {
+    All,
+    Albums,
+    Singles,
+    Compilations,
+}
+
+impl DiscoFilter {
+    const ALL: [DiscoFilter; 4] = [DiscoFilter::All, DiscoFilter::Albums, DiscoFilter::Singles, DiscoFilter::Compilations];
+    fn label(self) -> &'static str {
+        match self {
+            DiscoFilter::All => "All",
+            DiscoFilter::Albums => "Albums",
+            DiscoFilter::Singles => "Singles and EPs",
+            DiscoFilter::Compilations => "Compilations",
+        }
+    }
+    /// The operation suffix; the response sits under its lowercase.
+    fn which(self) -> &'static str {
+        match self {
+            DiscoFilter::All => "All",
+            DiscoFilter::Albums => "Albums",
+            DiscoFilter::Singles => "Singles",
+            DiscoFilter::Compilations => "Compilations",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DiscoSort {
+    Date,
+    Name,
+}
+
+/// Sort and view, shared by every artist's discography.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DiscoPrefs {
+    pub sort: DiscoSort,
+    pub desc: bool,
+    pub grid: bool,
+}
+
+impl Default for DiscoPrefs {
+    fn default() -> Self {
+        DiscoPrefs { sort: DiscoSort::Date, desc: true, grid: false }
+    }
+}
+
+impl DiscoPrefs {
+    fn order(self) -> &'static str {
+        match (self.sort, self.desc) {
+            (DiscoSort::Date, true) => "DATE_DESC",
+            (DiscoSort::Date, false) => "DATE_ASC",
+            (DiscoSort::Name, true) => "NAME_DESC",
+            (DiscoSort::Name, false) => "NAME_ASC",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DiscoMenu {
+    Filter,
+    Sort,
+}
+
 pub struct DiscoPage {
     pub name: String,
+    /// albums, singles + EPs, compilations
+    pub counts: [usize; 3],
+    pub filter: DiscoFilter,
+    /// the order the releases were fetched in
+    pub order: &'static str,
     pub releases: Vec<Release>,
     pub total: usize,
+    /// bumped on every refetch; an older loader stops when it sees a newer one
+    pub seq: u64,
 }
 
 fn s<'a>(v: &'a Value, p: &str) -> &'a str {
     v.pointer(p).and_then(Value::as_str).unwrap_or_default()
 }
 
-fn releases(v: &Value) -> (Vec<Release>, usize) {
-    let all = v.pointer("/data/artistUnion/discography/all");
+fn releases(v: &Value, which: &str) -> (Vec<Release>, usize) {
+    let all = v.pointer(&format!("/data/artistUnion/discography/{}", which.to_lowercase()));
     let total = all.and_then(|a| a.get("totalCount")).and_then(Value::as_u64).unwrap_or(0) as usize;
     let items = all.and_then(|a| a.get("items")).and_then(Value::as_array);
     let out = items
@@ -118,45 +201,88 @@ pub(super) fn plays_text(n: u64) -> String {
 impl Shell {
     pub(super) fn load_disco(&mut self, artist: String, cx: &mut Context<Self>) {
         let Some(sp) = self.spotify.clone() else { return };
-        if self.disco_pages.contains_key(&artist) || !self.loading_pages.insert(format!("disco:{artist}")) {
+        if let Some(p) = self.disco_pages.get(&artist) {
+            // cached under another sort (changed on some other artist's page): refetch
+            if p.order != self.disco_prefs.order() {
+                self.fetch_disco(artist, cx);
+            }
+            return;
+        }
+        if !self.loading_pages.insert(format!("disco:{artist}")) {
             return;
         }
         cx.spawn(async move |this, cx| {
-            // the name, then 20 releases at a time (each page shown as it lands), each release's
-            // tracks right after its page
-            let (sp2, a) = (sp.clone(), artist.clone());
-            let name = cx
-                .background_executor()
-                .spawn(async move { sp2.discography_overview(&a).ok().map(|v| s(&v, "/data/artistUnion/profile/name").to_string()) })
-                .await
-                .unwrap_or_default();
+            let a = artist.clone();
+            let overview = cx.background_executor().spawn(async move { sp.discography_overview(&a).ok() }).await;
+            let count = |k: &str| {
+                overview.as_ref().and_then(|v| v.pointer(&format!("/data/artistUnion/discography/{k}/totalCount"))).and_then(Value::as_u64).unwrap_or(0) as usize
+            };
+            let name = overview.as_ref().map(|v| s(v, "/data/artistUnion/profile/name").to_string()).unwrap_or_default();
+            let counts = [count("albums"), count("singles"), count("compilations")];
+            this.update(cx, |this, cx| {
+                this.loading_pages.remove(&format!("disco:{artist}"));
+                let page = DiscoPage { name, counts, filter: DiscoFilter::All, order: "", releases: Vec::new(), total: 0, seq: 0 };
+                this.disco_pages.insert(artist.clone(), page);
+                this.fetch_disco(artist, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// (Re)loads the releases for the page's filter and the current sort: 20 at a time, each page
+    /// shown as it lands, its releases' tracks right after it.
+    fn fetch_disco(&mut self, artist: String, cx: &mut Context<Self>) {
+        let Some(sp) = self.spotify.clone() else { return };
+        let order = self.disco_prefs.order();
+        let Some(p) = self.disco_pages.get_mut(&artist) else { return };
+        p.seq += 1;
+        p.order = order;
+        p.releases.clear();
+        p.total = 0;
+        let (seq, which) = (p.seq, p.filter.which());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            // runs `f` on the page if this loader is still the current one
+            let current = |this: &mut Shell| this.disco_pages.get_mut(&artist).filter(|p| p.seq == seq).is_some();
             let mut offset = 0;
             loop {
                 let (sp2, a) = (sp.clone(), artist.clone());
-                let page = cx.background_executor().spawn(async move { sp2.discography_all(&a, offset, 20).map(|v| releases(&v)) }).await;
+                let page = cx.background_executor().spawn(async move { sp2.discography(&a, which, order, offset, 20).map(|v| releases(&v, which)) }).await;
                 let (list, total) = page.unwrap_or_default();
                 let uris: Vec<String> = list.iter().map(|r| r.uri.clone()).collect();
                 offset += list.len();
-                let n = name.clone();
-                let alive = this.update(cx, |this, cx| {
-                    this.loading_pages.remove(&format!("disco:{artist}"));
-                    let p = this.disco_pages.entry(artist.clone()).or_insert_with(|| DiscoPage { name: n, releases: Vec::new(), total });
-                    p.releases.extend(list);
-                    cx.notify();
-                });
-                if alive.is_err() {
+                let ok = this
+                    .update(cx, |this, cx| {
+                        if !current(this) {
+                            return false;
+                        }
+                        let p = this.disco_pages.get_mut(&artist).unwrap();
+                        p.total = total;
+                        p.releases.extend(list);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !ok {
                     return;
                 }
                 for uri in uris.iter() {
                     let (sp3, u) = (sp.clone(), uri.clone());
                     let tracks = cx.background_executor().spawn(async move { sp3.album_tracks(&u).map(|v| album_tracks(&v, &u)) }).await;
-                    let alive = this.update(cx, |this, cx| {
-                        if let Some(r) = this.disco_pages.get_mut(&artist).and_then(|p| p.releases.iter_mut().find(|r| &r.uri == uri)) {
-                            r.tracks = Some(tracks.unwrap_or_default());
-                        }
-                        cx.notify();
-                    });
-                    if alive.is_err() {
+                    let ok = this
+                        .update(cx, |this, cx| {
+                            if !current(this) {
+                                return false;
+                            }
+                            if let Some(r) = this.disco_pages.get_mut(&artist).and_then(|p| p.releases.iter_mut().find(|r| &r.uri == uri)) {
+                                r.tracks = Some(tracks.unwrap_or_default());
+                            }
+                            cx.notify();
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !ok {
                         return;
                     }
                 }
@@ -166,6 +292,127 @@ impl Shell {
             }
         })
         .detach();
+    }
+
+    fn set_disco_filter(&mut self, artist: &str, f: DiscoFilter, cx: &mut Context<Self>) {
+        self.disco_menu = None;
+        if let Some(p) = self.disco_pages.get_mut(artist)
+            && p.filter != f
+        {
+            p.filter = f;
+            self.page_scroll.set_offset(gpui::point(px(0.), px(0.)));
+            self.fetch_disco(artist.to_string(), cx);
+        }
+        cx.notify();
+    }
+
+    fn set_disco_sort(&mut self, artist: &str, sort: DiscoSort, cx: &mut Context<Self>) {
+        self.disco_menu = None;
+        let p = &mut self.disco_prefs;
+        if p.sort == sort {
+            p.desc = !p.desc;
+        } else {
+            p.sort = sort;
+            p.desc = true;
+        }
+        self.page_scroll.set_offset(gpui::point(px(0.), px(0.)));
+        self.fetch_disco(artist.to_string(), cx);
+        cx.notify();
+    }
+
+    /// The filter / sort menu, in panel coordinates.
+    fn disco_menu_el(&self, artist: &str, page: &DiscoPage, filter_left: f32, sort_right: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let which = self.disco_menu?;
+        let item = |id: String, label: &'static str, lead: Option<&'static str>, mark: Option<&'static str>| {
+            let on = mark.is_some();
+            div()
+                .id(gpui::ElementId::Name(id.into()))
+                .h(px(40.))
+                .pl(px(12.))
+                .pr(px(8.))
+                .rounded(px(2.))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(12.))
+                .cursor_pointer()
+                .text_size(px(14.))
+                .line_height(px(19.2))
+                .text_color(if on { c(GREEN) } else { rgba(0xFFFFFFE6) })
+                .hover(move |st| {
+                    let st = st.bg(rgba(0xFFFFFF1A));
+                    if on { st } else { st.text_color(c(WHITE)) }
+                })
+                .when_some(lead, |d, l| d.child(svg().path(l).flex_none().size(px(16.)).text_color(if on { c(GREEN) } else { rgba(0xFFFFFFE6) })))
+                .child(one_line(label).flex_1().min_w_0())
+                .when_some(mark, |d, m| d.child(icon(m, 16., GREEN)))
+        };
+        let title = |t: &'static str| {
+            div().h(px(40.8)).pt(px(12.)).pl(px(12.)).pr(px(8.)).text_size(px(12.)).line_height(px(16.8)).font_weight(FontWeight::BOLD).text_color(rgba(0xFFFFFFB3)).child(t)
+        };
+        let mut list = super::library_view::menu_list(true).w(px(160.)).rounded(px(4.)).absolute().top(px(108.));
+        match which {
+            DiscoMenu::Filter => {
+                list = list.left(px(filter_left));
+                for f in DiscoFilter::ALL {
+                    let shown = match f {
+                        DiscoFilter::All => true,
+                        DiscoFilter::Albums => page.counts[0] > 0,
+                        DiscoFilter::Singles => page.counts[1] > 0,
+                        DiscoFilter::Compilations => page.counts[2] > 0,
+                    };
+                    if !shown {
+                        continue;
+                    }
+                    let a = artist.to_string();
+                    let mark = (page.filter == f).then_some("icons/check16.svg");
+                    list = list.child(
+                        item(format!("disco-f-{}", f.which()), f.label(), None, mark)
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_disco_filter(&a, f, cx))),
+                    );
+                }
+            }
+            DiscoMenu::Sort => {
+                list = list.left(px(sort_right + 3.2 - 160.)).child(title("Sort by"));
+                let p = self.disco_prefs;
+                for (sort, label) in [(DiscoSort::Date, "Release date"), (DiscoSort::Name, "Name")] {
+                    let a = artist.to_string();
+                    let mark = (p.sort == sort).then_some(if p.desc { "icons/arrow_down16.svg" } else { "icons/arrow_up16.svg" });
+                    list = list.child(
+                        item(format!("disco-s-{label}"), label, None, mark).on_click(cx.listener(move |this, _, _, cx| this.set_disco_sort(&a, sort, cx))),
+                    );
+                }
+                list = list.child(title("View as"));
+                for (grid, label, ic) in [(false, "List", "icons/view_list16.svg"), (true, "Grid", "icons/view_grid16.svg")] {
+                    let mark = (p.grid == grid).then_some("icons/check16.svg");
+                    list = list.child(item(format!("disco-v-{label}"), label, Some(ic), mark).on_click(cx.listener(move |this, _, _, cx| {
+                        this.disco_menu = None;
+                        this.disco_prefs.grid = grid;
+                        cx.notify();
+                    })));
+                }
+            }
+        }
+        Some(
+            list.id("disco-menu")
+                .occlude()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.disco_menu = None;
+                    this.menu_closed_at = std::time::Instant::now();
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn toggle_disco_menu(&mut self, m: DiscoMenu, cx: &mut Context<Self>) {
+        // a click on the open menu's own button: the outside-click already closed it
+        if self.disco_menu.is_none() && self.menu_closed_at.elapsed().as_millis() < 400 && self.disco_menu_last == Some(m) {
+            return;
+        }
+        self.disco_menu = if self.disco_menu == Some(m) { None } else { Some(m) };
+        self.disco_menu_last = Some(m);
+        cx.notify();
     }
 
     pub(super) fn disco_view(&self, artist: &str, main_w: f32, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -186,8 +433,33 @@ impl Shell {
         let mut tf = gpui::font(title_font());
         tf.weight = FontWeight::BOLD;
 
-        let mut body = div().flex().flex_col().pt(px(168.)).pb(px(16.));
-        for (ri, r) in page.releases.iter().enumerate() {
+        let grid = self.disco_prefs.grid;
+        let mut body = div().flex().flex_col().pt(px(if grid { 104. } else { 168. })).pb(px(16.));
+        if grid {
+            // cards in columns of at least 180, 12 inside the content spacing
+            let gw = list_w - 24.;
+            let cols = ((gw / 180.).floor() as usize).max(1);
+            let card_w = gw / cols as f32;
+            let items: Vec<crate::home::Item> = page
+                .releases
+                .iter()
+                .map(|r| crate::home::Item {
+                    uri: r.uri.clone(),
+                    kind: crate::home::Kind::Album,
+                    name: r.name.clone(),
+                    subtitle: format!("{} \u{2022} {}", r.year, r.kind),
+                    image: r.image.clone(),
+                    color: None,
+                    hide_title: false,
+                })
+                .collect();
+            for (ri, row) in items.chunks(cols).enumerate() {
+                body = body.child(div().ml(px(pad + 12.)).flex().flex_row().items_start().children(
+                    row.iter().enumerate().map(|(k, it)| self.sized_card(format!("disco-card-{}", ri * cols + k).into(), it, card_w, 4., cx)),
+                ));
+            }
+        }
+        for (ri, r) in page.releases.iter().enumerate().filter(|_| !grid) {
             let here = playing_ctx.as_deref() == Some(r.uri.as_str());
             let saved = self.in_library(&r.uri);
             let cover = r.image.as_deref();
@@ -345,7 +617,22 @@ impl Shell {
 
         // header row: sticky at 64; once the list scrolls under it, the top gets the panel colour
         let scrolled = f32::from(self.page_scroll.offset().y) < 0.;
+        let uf = gpui::font(ui_font());
+        let filter_open = self.disco_menu == Some(DiscoMenu::Filter);
+        let sort_open = self.disco_menu == Some(DiscoMenu::Sort);
+        let filter_label = page.filter.label();
+        let sort_label = match self.disco_prefs.sort {
+            DiscoSort::Date => "Release date",
+            DiscoSort::Name => "Name",
+        };
+        // where the buttons sit (for the menus): sort ends at the content spacing, filter before it
+        let sort_right = w - pad;
+        let sort_w = 16. + text_width(window, sort_label, 14., uf.clone()) + 36.;
+        let filter_w = 8. + text_width(window, filter_label, 14., uf.clone()) + 8. + 16. + 8.;
+        let filter_left = sort_right - sort_w - filter_w;
         let filter = div()
+            .id("disco-filter")
+            .group("disco-filter")
             .h(px(32.))
             .px(px(8.))
             .flex()
@@ -353,23 +640,48 @@ impl Shell {
             .items_center()
             .gap(px(8.))
             .rounded(px(4.))
+            .cursor_pointer()
             .text_size(px(14.))
             .line_height(px(19.2))
-            .text_color(rgba(0xFFFFFFB3))
-            .child("All")
-            .child(svg().path("icons/caret_down16.svg").size(px(16.)).text_color(rgba(0xFFFFFFB3)));
-        let sort = div()
-            .h(px(32.))
-            .pl(px(16.))
-            .pr(px(36.))
-            .relative()
-            .flex()
-            .items_center()
-            .text_size(px(14.))
-            .line_height(px(19.2))
-            .text_color(c(TEXT_SUBDUED))
-            .child("Release date")
-            .child(div().absolute().right(px(12.)).top(px(8.)).child(icon("icons/view_list16.svg", 16., TEXT_SUBDUED)));
+            .text_color(if filter_open { c(WHITE) } else { rgba(0xFFFFFFB3) })
+            .hover(|s| s.text_color(c(WHITE)))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_disco_menu(DiscoMenu::Filter, cx)))
+            .child(filter_label)
+            .child(
+                svg()
+                    .path("icons/caret_down16.svg")
+                    .size(px(16.))
+                    .text_color(if filter_open { c(WHITE) } else { rgba(0xFFFFFFB3) })
+                    .group_hover("disco-filter", |s| s.text_color(c(WHITE)))
+                    .when(filter_open, |s| s.with_transformation(gpui::Transformation::rotate(gpui::radians(std::f32::consts::PI)))),
+            );
+        let k = if sort_open { 1. } else { self.fades.get("disco-sort") };
+        let sort_col = fx::mix(0xB3B3B3FF, 0xFFFFFFFF, k);
+        let sort = self.on_fade(
+            div()
+                .id("disco-sort")
+                .h(px(32.))
+                .pl(px(16.))
+                .pr(px(36.))
+                .relative()
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .text_size(px(14.))
+                .line_height(px(19.2))
+                .text_color(sort_col)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_disco_menu(DiscoMenu::Sort, cx)))
+                .child(sort_label)
+                .child(
+                    div().absolute().right(px(12.)).top(px(8.)).child(
+                        fx::scaled_icon(if self.disco_prefs.grid { "icons/view_grid16.svg" } else { "icons/view_list16.svg" }, 16., 1. + 0.04 * k)
+                            .text_color(sort_col),
+                    ),
+                ),
+            "disco-sort",
+            fx::TERTIARY,
+            cx,
+        );
         let artist_uri = artist.to_string();
         let header = div()
             .absolute()
@@ -406,9 +718,11 @@ impl Shell {
                     .child(filter)
                     .child(sort),
             );
+        let menu = self.disco_menu_el(artist, page, filter_left, sort_right, cx);
         panel
             .child(div().id("disco-scroll").track_scroll(&self.page_scroll).absolute().inset_0().overflow_y_scroll().child(body))
             .child(header)
+            .children(menu)
             .into_any_element()
     }
 }
