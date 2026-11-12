@@ -75,6 +75,7 @@ impl ShapedLine {
             None,
             &self.decoration_runs,
             &[],
+            "",
             window,
             cx,
         )?;
@@ -147,6 +148,7 @@ impl WrappedLine {
             align_width,
             &self.decoration_runs,
             &self.wrap_boundaries,
+            &self.text,
             window,
             cx,
         )?;
@@ -193,6 +195,7 @@ fn paint_line(
     align_width: Option<Pixels>,
     decoration_runs: &[DecorationRun],
     wrap_boundaries: &[WrapBoundary],
+    text: &str,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<()> {
@@ -227,6 +230,8 @@ fn paint_line(
         let mut prev_glyph_position = Point::default();
         let mut max_glyph_size = size(px(0.), px(0.));
         let mut first_glyph_x = origin.x;
+        // Where the whitespace run before a wrap starts: underlines stop there, like a browser's.
+        let mut space_from: Option<Pixels> = None;
         for (run_ix, run) in layout.runs.iter().enumerate() {
             max_glyph_size = text_system.bounding_box(run.font_id, layout.font_size).size;
 
@@ -242,9 +247,10 @@ fn paint_line(
                         if glyph_origin.x == underline_origin.x {
                             underline_origin.x -= max_glyph_size.width.half();
                         };
+                        let end = space_from.filter(|x| *x > underline_origin.x).unwrap_or(glyph_origin.x);
                         window.paint_underline(
                             *underline_origin,
-                            glyph_origin.x - underline_origin.x,
+                            end - underline_origin.x,
                             underline_style,
                         );
                         underline_origin.x = origin.x;
@@ -276,6 +282,11 @@ fn paint_line(
                     glyph_origin.y += line_height;
                 }
                 prev_glyph_position = glyph.position;
+                if text.get(glyph.index..).and_then(|t| t.chars().next()).is_some_and(char::is_whitespace) {
+                    space_from.get_or_insert(glyph_origin.x);
+                } else {
+                    space_from = None;
+                }
 
                 let mut finished_underline: Option<(Point<Pixels>, UnderlineStyle)> = None;
                 let mut finished_strikethrough: Option<(Point<Pixels>, StrikethroughStyle)> = None;
@@ -298,14 +309,20 @@ fn paint_line(
                             finished_underline = current_underline.take();
                         }
                         if let Some(run_underline) = style_run.underline.as_ref() {
+                            // A plain `.underline()` (1px) is drawn like a browser's
+                            // `text-decoration: underline` (see `underline_metrics`).
+                            let (font_offset, font_thickness) = text_system.underline_metrics(run.font_id, layout.font_size);
+                            let auto = run_underline.thickness == px(1.) && font_thickness > px(0.);
+                            let y = if auto {
+                                glyph_origin.y + baseline_offset.y + font_offset - font_thickness.half()
+                            } else {
+                                glyph_origin.y + baseline_offset.y + (layout.descent * 0.618)
+                            };
                             current_underline.get_or_insert((
-                                point(
-                                    glyph_origin.x,
-                                    glyph_origin.y + baseline_offset.y + (layout.descent * 0.618),
-                                ),
+                                point(glyph_origin.x, y),
                                 UnderlineStyle {
                                     color: Some(run_underline.color.unwrap_or(style_run.color)),
-                                    thickness: run_underline.thickness,
+                                    thickness: if auto { font_thickness } else { run_underline.thickness },
                                     wavy: run_underline.wavy,
                                 },
                             ));

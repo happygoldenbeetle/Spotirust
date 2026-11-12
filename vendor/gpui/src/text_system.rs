@@ -261,6 +261,15 @@ impl TextSystem {
         self.read_metrics(font_id, |metrics| metrics.descent(font_size))
     }
 
+    /// A browser's `text-decoration: underline` (Blink): centred on the font's underline
+    /// offset below the baseline, `max(1px, font-size / 10)` thick.
+    pub fn underline_metrics(&self, font_id: FontId, font_size: Pixels) -> (Pixels, Pixels) {
+        self.read_metrics(font_id, |m| {
+            let k = font_size.0 / m.units_per_em as f32;
+            (Pixels(-m.underline_position * k), Pixels((font_size.0 / 10.).max(1.)))
+        })
+    }
+
     /// Get the recommended baseline offset for the given font and line height.
     pub fn baseline_offset(
         &self,
