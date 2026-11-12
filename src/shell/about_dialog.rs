@@ -218,7 +218,7 @@ impl Shell {
         if !a.cities.is_empty() {
             stats = stats.child(cities);
         }
-        // Social links: 24px icon + 14px label, white .7 (white on hover), 16 apart.
+        // Social links: 24px icon + 4 + 14px label, white (the client's computed color), 16 apart.
         if !a.links.is_empty() {
             let mut links = div().mt(px(24.)).pt(px(16.)).flex().flex_col().gap(px(16.));
             for (i, (name, url)) in a.links.iter().enumerate() {
@@ -241,10 +241,9 @@ impl Shell {
                         .cursor_pointer()
                         .text_size(px(14.))
                         .line_height(px(19.2))
-                        .text_color(rgba(0xFFFFFFB3))
-                        .hover(|s| s.text_color(c(WHITE)))
+                        .text_color(c(WHITE))
                         .on_click(move |_, _, cx| cx.open_url(&url))
-                        .child(svg().path(path).size(px(24.)).flex_none().text_color(rgba(0xFFFFFFB3)).group_hover(id.clone(), |s| s.text_color(c(WHITE))))
+                        .child(svg().path(path).size(px(24.)).flex_none().text_color(c(WHITE)))
                         .child(name.clone()),
                 );
             }
