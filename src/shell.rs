@@ -2900,14 +2900,50 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .px(px(16.))
-                    .child(
-                        div()
-                            .h(px(64.))
-                            .flex_none()
-                            .pt(px(16.))
-                            .flex()
-                            .flex_row()
-                            .items_start()
+                    .child({
+                        // Hovering the header slides in "Hide Now Playing view" before the title:
+                        // a 28px slot (`inline-size .3s ease-out`), the 16px button fading in from -16px.
+                        let t = self.fades.get("npv-hdr");
+                        let ht = self.fades.get("npv-hide");
+                        self.on_fade(
+                            div()
+                                .id("npv-hdr")
+                                .h(px(64.))
+                                .flex_none()
+                                .pt(px(16.))
+                                .flex()
+                                .flex_row()
+                                .items_start(),
+                            "npv-hdr",
+                            fx::Trans { enter: 0.3, leave: 0.3, ease: fx::Ease::Out },
+                            cx,
+                        )
+                        .child(
+                            div().relative().flex_none().w(px(28. * t)).h(px(32.)).child(
+                                self.on_fade(
+                                    div()
+                                        .id("npv-hide")
+                                        .absolute()
+                                        .left(px(-16. * (1. - t)))
+                                        .top_0()
+                                        .w(px(16.))
+                                        .h(px(32.))
+                                        .opacity(t)
+                                        .cursor_pointer()
+                                        .flex()
+                                        .items_center()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.right_panel = RightPanel::None;
+                                            cx.notify();
+                                        }))
+                                        .child(svg().path("icons/npv_hide.svg").size(px(16.)).text_color(fx::mix(0xB3B3B3FF, 0xFFFFFFFF, ht))),
+                                    "npv-hide",
+                                    fx::TERTIARY,
+                                    cx,
+                                ),
+                            ),
+                        )
+                    }
                             .child(
                                 one_line(header)
                                     .flex_1()

@@ -334,20 +334,39 @@ impl ImageCache {
         self.load(url, device_px(css_px), cx)
     }
 
+    /// While `width` loads: the ready size of `url` closest to it (a bigger one first, as scaling
+    /// down looks right), so resizing never flashes another size's copy, e.g. the player bar's 56px
+    /// thumbnail of the same cover.
+    fn nearest(&self, url: &str, width: u32) -> Option<Arc<RenderImage>> {
+        let ready = |key: &String| match self.entries.get(key) {
+            Some(Entry::Ready(img)) => key.rsplit_once('#').and_then(|(_, w)| w.parse::<u32>().ok()).map(|w| (w, img.clone())),
+            _ => None,
+        };
+        let sizes: Vec<(u32, Arc<RenderImage>)> = self.sizes.get(url).map(|k| k.iter().filter_map(ready).collect()).unwrap_or_default();
+        sizes
+            .iter()
+            .filter(|(w, _)| *w >= width)
+            .min_by_key(|(w, _)| *w)
+            .or_else(|| sizes.iter().max_by_key(|(w, _)| *w))
+            .map(|(_, img)| img.clone())
+            .or_else(|| self.latest.get(url).cloned())
+    }
+
     fn load(&mut self, url: &str, width: u32, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
         let key = if width > 0 { format!("{url}#{width}") } else { url.to_string() };
         match self.entries.get(&key) {
             Some(Entry::Ready(img)) => return Some(img.clone()),
             Some(Entry::Failed) => return None,
-            Some(Entry::Loading) => return self.latest.get(url).cloned(),
+            Some(Entry::Loading) => return self.nearest(url, width),
             None => {}
         }
         if self.inflight.contains(url) {
             // Asked again once that load lands (it notifies).
-            return self.latest.get(url).cloned();
+            return self.nearest(url, width);
         }
         self.inflight.insert(url.to_string());
         self.entries.insert(key.clone(), Entry::Loading);
+        let fallback = self.nearest(url, width);
         let url = url.to_string();
         cx.spawn(async move |this, cx| {
             let u = url.clone();
@@ -378,6 +397,8 @@ impl ImageCache {
             });
         })
         .detach();
-        None
+        // Keep showing what we have of this picture while the new size loads (returning None
+        // here drew the placeholder for a frame on every resize step).
+        fallback
     }
 }
