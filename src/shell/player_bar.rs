@@ -1,7 +1,9 @@
 //! Player bar, measured and read from the reference client (`dwp-now-playing-bar` and the
 //! player-controls chunk). Icon buttons behave like Encore tertiary buttons:
 //!   rest #b3b3b3 (right-hand icons rgba(255,255,255,.7)) -> hover white and scale 1.04,
-//!   hover-in 50 ms / hover-out 150 ms, cubic-bezier(.3,0,0,1); pressed: opacity .7, scale 1.
+//!   `transition: color .15s, transform .15s` cubic-bezier(.3,0,0,1) both ways (measured on every
+//!   control); the scale is a transform, so the button's box and hit area never change.
+//!   Pressed: opacity .7, scale 1.
 //!   On (shuffle / repeat): #1ed760 with a 4px dot underneath. Toggled panels (queue / connect /
 //!   lyrics): #1db954 -> #1ed760 on hover, with the dot.
 //!   Play: white circle, hover #f0f0f0 + scale 1.04, pressed #c7c7c7.
@@ -15,42 +17,24 @@ use gpui::{ClickEvent, ScrollDelta, ScrollWheelEvent};
 
 use super::*;
 
-const HOVER_IN: f32 = 0.05;
-const HOVER_OUT: f32 = 0.15;
+const HOVER: f32 = 0.15;
 const TIP_DELAY: Duration = Duration::from_millis(200);
 
 /// Hover / press state of the bar's buttons (drives the Encore hover animation and tooltips).
 #[derive(Default)]
 pub struct BarFx {
     pub hover: Option<(&'static str, Instant)>,
-    pub left: Option<(&'static str, Instant)>,
     pub press: Option<&'static str>,
 }
 
 /// Bounds + tooltip text of each control, recorded while painting (anchors the tooltip).
 pub type TipAnchors = Rc<RefCell<HashMap<&'static str, (Bounds<Pixels>, SharedString)>>>;
 
-/// Encore's "productive" easing, cubic-bezier(.3, 0, 0, 1).
-fn productive(x: f32) -> f32 {
-    let (x1, y1, x2, y2) = (0.3f32, 0.0f32, 0.0f32, 1.0f32);
-    let b = |t: f32, p1: f32, p2: f32| 3. * (1. - t) * (1. - t) * t * p1 + 3. * (1. - t) * t * t * p2 + t * t * t;
-    let (mut lo, mut hi) = (0f32, 1f32);
-    for _ in 0..24 {
-        let m = (lo + hi) / 2.;
-        if b(m, x1, x2) < x {
-            lo = m
-        } else {
-            hi = m
-        }
-    }
-    b((lo + hi) / 2., y1, y2)
-}
+use super::fx::mix;
 
-/// 0xRRGGBBAA blend.
-fn mix(a: u32, b: u32, t: f32) -> gpui::Rgba {
-    let ch = |v: u32, s: u32| ((v >> s) & 0xFF) as f32 / 255.;
-    let l = |s| ch(a, s) + (ch(b, s) - ch(a, s)) * t;
-    gpui::Rgba { r: l(24), g: l(16), b: l(8), a: l(0) }
+/// An icon scaled by `s` as a transform (around its centre; layout stays `size`).
+fn scaled_icon(path: &'static str, size: f32, s: f32) -> gpui::Svg {
+    svg().path(path).size(px(size)).with_transformation(gpui::Transformation::scale(gpui::size(s, s)))
 }
 
 #[derive(Clone, Copy)]
@@ -79,31 +63,21 @@ impl Look {
 impl Shell {
     /// Hover progress (0..1) of a bar control, eased.
     pub(super) fn fx_t(&self, id: &str) -> f32 {
-        if let Some((h, at)) = self.bar_fx.hover {
-            if h == id {
-                return productive((at.elapsed().as_secs_f32() / HOVER_IN).min(1.));
-            }
-        }
-        if let Some((l, at)) = self.bar_fx.left {
-            if l == id {
-                return 1. - productive((at.elapsed().as_secs_f32() / HOVER_OUT).min(1.));
-            }
-        }
-        0.
+        self.fades.get(id)
     }
 
     /// Whether a hover transition is still running (the root then asks for another frame).
     pub(super) fn fx_animating(&self) -> bool {
-        self.bar_fx.hover.is_some_and(|(_, at)| at.elapsed().as_secs_f32() < HOVER_IN)
-            || self.bar_fx.left.is_some_and(|(_, at)| at.elapsed().as_secs_f32() < HOVER_OUT)
+        self.fades.animating()
     }
 
     pub(super) fn bar_hovered(&mut self, id: &'static str, on: bool, cx: &mut Context<Self>) {
         let now = Instant::now();
+        self.fades.hover(id.into(), on, HOVER, super::fx::Ease::Productive);
         if on {
             if self.bar_fx.hover.map(|h| h.0) != Some(id) {
                 if let Some((prev, _)) = self.bar_fx.hover {
-                    self.bar_fx.left = Some((prev, now));
+                    self.fades.hover(prev.into(), false, HOVER, super::fx::Ease::Productive);
                 }
                 self.bar_fx.hover = Some((id, now));
                 cx.spawn(async move |this, cx| {
@@ -114,7 +88,6 @@ impl Shell {
             }
         } else if self.bar_fx.hover.map(|h| h.0) == Some(id) {
             self.bar_fx.hover = None;
-            self.bar_fx.left = Some((id, now));
         }
         cx.notify();
     }
@@ -162,7 +135,7 @@ impl Shell {
         let dot = matches!(look, Look::On | Look::Toggled);
         self.bar_wire(round_button(id, 32.), id, tip.into(), cx)
             .opacity(if pressed { 0.7 } else { 1. })
-            .child(svg().path(path).size(px(16. * scale)).text_color(color))
+            .child(scaled_icon(path, 16., scale).text_color(color))
             .when(dot, |d| {
                 d.child(div().absolute().bottom_0().left(px(14.)).size(px(4.)).rounded_full().bg(color))
             })
@@ -276,7 +249,7 @@ impl Shell {
                     }))
                     .child(match self.playing_track_id().and_then(|id| self.like_burst(&format!("spotify:track:{id}"), 16.)) {
                         Some(b) => b,
-                        None => svg().path(path).size(px(16. * scale)).text_color(mix(rest, hover, t_)).into_any_element(),
+                        None => scaled_icon(path, 16., scale).text_color(mix(rest, hover, t_)).into_any_element(),
                     })
             })
         });
@@ -300,12 +273,12 @@ impl Shell {
             let pressed = self.bar_fx.press == Some(id);
             let scale = if pressed { 1. } else { 1. + 0.04 * t };
             let bg = if pressed { c(0xC7C7C7) } else { mix(0xFFFFFFFF, 0xF0F0F0FF, t) };
-            div().size(px(32.)).flex().items_center().justify_center().child(
-                self.bar_wire(round_button(id, 32. * scale), id, if playing { "Pause" } else { "Play" }.into(), cx)
-                    .bg(bg)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_play(cx)))
-                    .child(icon(if playing { "icons/pause.svg" } else { "icons/play.svg" }, 16. * scale, 0x000000)),
-            )
+            // The white circle grows (transform) behind a fixed 32px hit area.
+            let d = 32. * scale;
+            self.bar_wire(round_button(id, 32.), id, if playing { "Pause" } else { "Play" }.into(), cx)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_play(cx)))
+                .child(div().absolute().left(px((32. - d) / 2.)).top(px((32. - d) / 2.)).size(px(d)).rounded_full().bg(bg))
+                .child(scaled_icon(if playing { "icons/pause.svg" } else { "icons/play.svg" }, 16., scale).text_color(c(0x000000)))
         };
         let center = div()
             .w(relative(0.4))

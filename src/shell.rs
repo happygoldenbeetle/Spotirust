@@ -162,6 +162,8 @@ pub struct Shell {
     disco_filter: usize,
     /// Player bar hover / press animation state and tooltip anchors.
     bar_fx: player_bar::BarFx,
+    /// Hover fades of controls that transition in the client (by element id).
+    fades: fx::Fades,
     bar_tips: player_bar::TipAnchors,
     /// Level to restore when unmuting.
     muted_volume: Option<u32>,
@@ -430,6 +432,7 @@ impl Shell {
             artist_more: false,
             disco_filter: 0,
             bar_fx: Default::default(),
+            fades: Default::default(),
             bar_tips: Default::default(),
             muted_volume: None,
             queue: None,
