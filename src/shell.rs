@@ -34,6 +34,7 @@ mod add_popover;
 mod search_view;
 mod like_fx;
 mod section_view;
+mod lib_find;
 mod fx;
 
 use std::collections::{HashMap, HashSet};
@@ -135,6 +136,8 @@ pub struct Shell {
     search_pages: HashMap<(String, search::Filter), search::Results>,
     lib_prefs: library_view::LibPrefs,
     lib_menu: bool,
+    /// Your Library's filter field.
+    lib_find: lib_find::LibFind,
     /// View-as highlight animation: index it slides from, and a counter that restarts it.
     lib_view_from: f32,
     lib_view_seq: usize,
@@ -421,6 +424,7 @@ impl Shell {
             lib_prefs: library_view::LibPrefs::load(),
             // Debug: SPOTIRUST_LIBMENU=1 opens the library Sort/View menu (for captures).
             lib_menu: std::env::var_os("SPOTIRUST_LIBMENU").is_some(),
+            lib_find: Default::default(),
             lib_view_from: library_view::LibPrefs::load().view_index(),
             lib_view_seq: 0,
             lib_hover: false,
@@ -1048,7 +1052,7 @@ impl Shell {
     /// The desktop client's playback shortcuts: Space play/pause, Ctrl+Right/Left next/previous,
     /// Ctrl+Up/Down volume ±10, Ctrl+S shuffle, Ctrl+R repeat.
     fn shortcut_key(&mut self, ev: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
-        if self.add_popover_key(ev, cx) || self.search_key(ev, cx) {
+        if self.add_popover_key(ev, cx) || self.search_key(ev, cx) || self.lib_find_key(ev, cx) {
             cx.stop_propagation();
             return;
         }
@@ -1850,6 +1854,7 @@ impl Shell {
         }
         let me_name = self.me.as_ref().and_then(|m| m.display_name.clone()).unwrap_or_default();
         let mut items = self.library_items();
+        items.retain(|it| self.lib_find_matches(it));
         library_view::sort_items(&mut items, self.lib_prefs);
         let rows = self.library_content(&items, &me_name, cx);
 
@@ -2042,18 +2047,7 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .child(
-                        round_button("lib-search", 32.)
-                            .group("lib-search")
-                            .hover(|s| s.bg(rgba(0xFFFFFF1A)))
-                            .child(
-                                svg()
-                                    .path("icons/lib_search.svg")
-                                    .size(px(16.))
-                                    .text_color(rgba(ICON_DIM))
-                                    .group_hover("lib-search", |s| s.text_color(c(WHITE))),
-                            ),
-                    )
+                    .child(self.lib_find_field(window, cx))
                     .child(div().flex_1())
                     .child(self.on_fade(
                         div()
@@ -2077,7 +2071,8 @@ impl Shell {
                                 this.lib_view_seq += 1;
                                 cx.notify();
                             }))
-                            .child(self.lib_prefs.sort.label())
+                            // the label gives way while the filter field is open
+                            .when(!self.lib_find.open, |d| d.child(self.lib_prefs.sort.label()))
                             .child(
                                 fx::scaled_icon(self.lib_prefs.view.icon(), 16., 1. + 0.04 * self.fades.get("sort"))
                                     .text_color(fx::mix(0xB3B3B3FF, 0xFFFFFFFF, self.fades.get("sort"))),
@@ -3042,7 +3037,7 @@ impl Render for Shell {
             self.open_miniplayer(window, cx);
         }
         self.refresh_mini_color(cx);
-        if self.fx_animating() || self.like_burst_animating() || self.home_animating() {
+        if self.fx_animating() || self.like_burst_animating() || self.home_animating() || self.lib_find_animating() {
             window.request_animation_frame();
         }
         div()

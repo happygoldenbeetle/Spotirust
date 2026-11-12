@@ -36,6 +36,8 @@ pub enum Ease {
     InOut,
     /// Encore's "productive", cubic-bezier(.3, 0, 0, 1).
     Productive,
+    /// cubic-bezier(.3, 0, .4, 1) (the library filter field's width / opacity).
+    Standard,
 }
 
 impl Ease {
@@ -48,6 +50,7 @@ impl Ease {
             Ease::Out => bezier(0., 0., 0.58, 1., x),
             Ease::InOut => bezier(0.42, 0., 0.58, 1., x),
             Ease::Productive => bezier(0.3, 0., 0., 1., x),
+            Ease::Standard => bezier(0.3, 0., 0.4, 1., x),
         }
     }
 }
