@@ -561,7 +561,7 @@ impl Shell {
             Act::CreatePlaylist => self.create_playlist(cx),
             Act::Queue(uri) => {
                 let Some(api) = api else { return };
-                self.background(cx, "Added to queue", move || {
+                let add = move || {
                     if uri.contains(":track:") || uri.contains(":episode:") {
                         api.add_to_queue(&uri)
                     } else {
@@ -570,7 +570,36 @@ impl Shell {
                         }
                         Ok(())
                     }
-                });
+                };
+                // With no active device (the listed one went away) the client queues on itself:
+                // load the last state here, paused, then add.
+                let retry = add.clone();
+                cx.spawn(async move |this, cx| {
+                    let res = cx.background_executor().spawn(async move { add() }).await;
+                    let res = match res {
+                        Err(e) if super::no_device(&e) => {
+                            let woke = this
+                                .update(cx, |this, _| {
+                                    let local = this.local.clone()?;
+                                    this.local_fallback(&local, &Play::Pause).ok()
+                                })
+                                .ok()
+                                .flatten()
+                                .is_some();
+                            if woke {
+                                cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                                cx.background_executor().spawn(async move { retry() }).await
+                            } else {
+                                Err(e)
+                            }
+                        }
+                        r => r,
+                    };
+                    let _ = this.update(cx, |this, cx| {
+                        this.background_then(cx, "Added to queue".into(), move || res, |_, _| {});
+                    });
+                })
+                .detach();
             }
             Act::SetLiked(uri, saved) => {
                 let Some(api) = api else { return };

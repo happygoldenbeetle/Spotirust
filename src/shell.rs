@@ -373,9 +373,16 @@ struct Intent {
 }
 
 /// Where the background start of the built-in player leaves its result.
+/// Spotify's answer when no device is active (or the listed one is gone).
+pub(crate) fn no_device(e: &anyhow::Error) -> bool {
+    let msg = format!("{e:#}");
+    msg.contains("NO_ACTIVE_DEVICE") || msg.contains("404")
+}
+
 type LocalSlot = Arc<std::sync::Mutex<Option<anyhow::Result<crate::player::LocalPlayer>>>>;
 
 /// A player command; goes to the built-in device when it can (instant), else the Web API.
+#[derive(Clone)]
 pub enum Play {
     Resume,
     Pause,
@@ -756,6 +763,17 @@ impl Shell {
 
     /// Sends a player command off the UI thread, then refreshes playback state.
     fn command(&mut self, f: impl FnOnce(&Api) -> anyhow::Result<()> + Send + 'static, cx: &mut Context<Self>) {
+        self.command_or_local(f, None, cx);
+    }
+
+    /// Like `command`, but when Spotify answers that no device is active (the listed one went
+    /// away), runs `fallback` on the built-in player instead, the way the client then plays here.
+    fn command_or_local(
+        &mut self,
+        f: impl FnOnce(&Api) -> anyhow::Result<()> + Send + 'static,
+        fallback: Option<Play>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(api) = self.api.clone() else { return };
         cx.spawn(async move |this, cx| {
             let a = api.clone();
@@ -764,10 +782,17 @@ impl Shell {
             let a = api.clone();
             let pb = cx.background_executor().spawn(async move { a.playback_or_last() }).await;
             let _ = this.update(cx, |this, cx| {
+                let result = match (result, fallback, this.local.clone()) {
+                    (Err(e), Some(cmd), Some(local)) if no_device(&e) => {
+                        eprintln!("command: {e:#}; playing here instead");
+                        this.local_fallback(&local, &cmd)
+                    }
+                    (r, ..) => r,
+                };
                 if let Err(e) = result {
                     let msg = format!("{e:#}");
                     eprintln!("command: {msg}");
-                    let text = if msg.contains("NO_ACTIVE_DEVICE") || msg.contains("404") {
+                    let text = if no_device(&e) {
                         "Couldn't find an active device. Start Spotify on a device first.".to_string()
                     } else if msg.contains("PREMIUM_REQUIRED") {
                         "Spotify Premium is required for this.".to_string()
@@ -1055,8 +1080,15 @@ impl Shell {
                         Play::Repeat(r) => local.repeat(r),
                         _ => Ok(()),
                     },
-                    // Another device is playing: hand its session over (it stops there).
-                    Play::Resume if other_device => local.take_over(true),
+                    // Another device is playing: hand its session over (it stops there). If that
+                    // device is gone the hand-over never comes; then play here from the last state.
+                    Play::Resume if other_device => {
+                        let r = local.take_over(true);
+                        if r.is_ok() {
+                            self.watch_take_over(local.clone(), cx);
+                        }
+                        r
+                    }
                     // Nothing loaded here: load what was last playing, then apply the command.
                     _ => self.restore_local(&local, &cmd),
                 };
@@ -1067,7 +1099,8 @@ impl Shell {
                 }
             }
         }
-        self.command(
+        let fallback = self.local.is_some().then(|| cmd.clone());
+        self.command_or_local(
             move |api| match cmd {
                 Play::Resume => api.resume(),
                 Play::Pause => api.pause(),
@@ -1080,8 +1113,36 @@ impl Shell {
                 Play::Context(c) => api.play_context(&c),
                 Play::ContextAt(c, t) => api.play_context_at(&c, &t),
             },
+            fallback,
             cx,
         );
+    }
+
+    /// Runs `cmd` on the built-in player when no other device can take it.
+    fn local_fallback(&self, local: &crate::player::LocalPlayer, cmd: &Play) -> anyhow::Result<()> {
+        match cmd {
+            Play::Context(c) => local.play_context(c, None),
+            Play::ContextAt(c, t) => local.play_context(c, Some(t)),
+            _ => self.restore_local(local, cmd),
+        }
+    }
+
+    /// After asking another device to hand playback over: if nothing arrived here in a couple of
+    /// seconds (that device is offline), load the last state here and play.
+    fn watch_take_over(&mut self, local: Arc<crate::player::LocalPlayer>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(2500)).await;
+            let _ = this.update(cx, |this, cx| {
+                if !local.state().loaded {
+                    eprintln!("local player: hand-over didn't arrive; playing here from the last state");
+                    if let Err(e) = this.restore_local(&local, &Play::Resume) {
+                        eprintln!("local player: {e:#}");
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Loads the last known track (context, position) into the built-in player, then applies
@@ -1153,6 +1214,12 @@ impl Shell {
             self.create_open = false;
             self.profile_open = false;
             cx.notify();
+            return;
+        }
+        // Alt+Left / Alt+Right: back / forward, like the client (and Chromium).
+        if k.modifiers.alt && !ctrl && !k.modifiers.shift && matches!(k.key.as_str(), "left" | "right") {
+            if k.key == "left" { self.go_back(cx) } else { self.go_forward(cx) }
+            cx.stop_propagation();
             return;
         }
         match (k.key.as_str(), ctrl) {
@@ -3136,6 +3203,15 @@ impl Render for Shell {
             .when(self.drag.is_some(), |d| d.cursor(CursorStyle::ResizeColumn))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| this.shortcut_key(ev, cx)))
+            // Mouse side buttons go back / forward when released, as in Chromium.
+            .on_mouse_up(
+                MouseButton::Navigate(gpui::NavigationDirection::Back),
+                cx.listener(|this, _, _, cx| this.go_back(cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                cx.listener(|this, _, _, cx| this.go_forward(cx)),
+            )
             .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
                 if let Some((kind, _)) = this.slider_drag {
                     if !ev.dragging() {
