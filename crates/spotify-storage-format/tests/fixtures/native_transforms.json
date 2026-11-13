@@ -1,0 +1,128 @@
+{
+  "reference": "Spotify Windows 1.3.8.620",
+  "test_key": "2b7e151628aed2a6abf7158809cf4f3c",
+  "records": [
+    {
+      "slot": 0,
+      "plain": "60a10afddeadbeef08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "cipher": "77f57c60b925672dce1dba8e1164f26bbb01e9ba84a232f5f115ee7b42416c6df23163ff6ebbbe69365513cecd7bf0fd07f8bb749778ad4109ce84f3950a8e69"
+    },
+    {
+      "slot": 1,
+      "plain": "60a10afddeadbeef08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "cipher": "7e7cadc1f85584b8fc7f76336a2e30c7df3b2d1351c9177a71458d2c3d75e038f2e6bec2732103bb0d2e5c4f1e6512a93089547f5c0e09b1addc2eb26e82a8dc"
+    },
+    {
+      "slot": 8,
+      "plain": "60a10afddeadbeef08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "cipher": "5833f570ad621e14a25c06693a60f6043a21ef59208993eb6f85974d9871a9035c5d280c124a6de1bd11bf6bb2da20fc75ca779d02d7495d416055fc2fd50547"
+    },
+    {
+      "slot": 1234,
+      "plain": "60a10afddeadbeef08090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "cipher": "60423acd3caa43b2822a19503cf5a8d6162e7c6fad7c276016cb1fc64a4221e668ff64e1da704cd253830b191f93155d97396cbaba5f33eb4c404e4416da7f18"
+    }
+  ],
+  "payload": [
+    {
+      "iv": "000102030405060708090a0b0c0d0e0f",
+      "offset": 0,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "50ff65cf9d6834b1d2003de297a2e26fbf309c5d93f685bdc22851ff67eabd"
+    },
+    {
+      "iv": "000102030405060708090a0b0c0d0e0f",
+      "offset": 1,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "fe66ce9a6937b0dd013ee390a3e16ea0319f5c94f786bccd2952fe60ebbe41"
+    },
+    {
+      "iv": "000102030405060708090a0b0c0d0e0f",
+      "offset": 15,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "60ae238d4a82e594a2d33b40e876f9ac4f87f89c9d1095875aa0d49b841193"
+    },
+    {
+      "iv": "000102030405060708090a0b0c0d0e0f",
+      "offset": 16,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "af208c4d83e695add23841ef77faad5086fb9d9a11968655a1d79a83109038"
+    },
+    {
+      "iv": "000102030405060708090a0b0c0d0e0f",
+      "offset": 17,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "218f4c84e796acdd3942ee70fbae5199fa9e9b16978554aed6998217913b2e"
+    },
+    {
+      "iv": "000102030405060708090a0b0c0d0e0f",
+      "offset": 16383,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "d2e38e0fbcc0bcb2295084c61b5dc500641f730f4f7775846e7e7bb936fbad"
+    }
+  ],
+  "files": [
+    {
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 0,
+      "version": 0,
+      "offset": 0,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "50ff65cf9d6834b1d2003de297a2e26fbf309c5d93f685bdc22851ff67eabd"
+    },
+    {
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 0,
+      "version": 4660,
+      "offset": 7,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "9621dbdce25d4ddbc8fe48f9553e4fcda0a96f890dceb0dd8557ac5014264b"
+    },
+    {
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 1,
+      "version": 65535,
+      "offset": 16383,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "a003484bd9669116333e1ecbf6d32c0c5b3776c15aad30d89c4645ce1ba8be"
+    },
+    {
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 4,
+      "version": 19,
+      "offset": 16384,
+      "plain": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "cipher": "5bbba56a0aab6fe3c7b7ee3c6a9c298178759f1c0fda1521351c9d744f1857"
+    }
+  ],
+  "names": [
+    {
+      "state": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3",
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 0,
+      "version": 0,
+      "name": "2044444cf2d38e4b1a27801e5395e5cc11b9f9e1.file"
+    },
+    {
+      "state": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3",
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 0,
+      "version": 4660,
+      "name": "ff8fd3190b0bbfff0eef3f7ad196cfef4c3c2ca6.file"
+    },
+    {
+      "state": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3",
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 1,
+      "version": 65535,
+      "name": "c8ef84ab8df38ebc3a52e2c3c085415362b47f1e.file"
+    },
+    {
+      "state": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3",
+      "file_id": "000102030405060708090a0b0c0d0e0f10111213",
+      "realm": 4,
+      "version": 19,
+      "name": "96c64baf3a3026d233080d3e1f12d664197f9d84.file"
+    }
+  ]
+}
