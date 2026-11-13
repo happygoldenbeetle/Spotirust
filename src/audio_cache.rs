@@ -1,14 +1,16 @@
-//! Explicitly configured, read-only desktop cache snapshot integration.
+//! Explicit desktop cache snapshot integration. Writes require a separate copy.
 use anyhow::{Context, Result};
-use librespot_audio::cache_backend::{CacheBackend, CachedReader, set_cache_backend};
+use librespot_audio::cache_backend::{CacheBackend, CacheSource, CachedReader, set_cache_backend};
 use librespot_core::FileId;
 use serde::Deserialize;
 use spotify_storage_format::reader::{Catalog, StorageFile};
+use spotify_storage_format::store::WorkingStore;
 use std::{
     collections::HashSet,
     io::{self, Read, Seek, SeekFrom},
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Deserialize)]
@@ -17,10 +19,13 @@ struct Profile {
     snapshot_root: PathBuf,
     storage_key_hex: String,
     naming_state_hex: String,
+    #[serde(default)]
+    writable: bool,
 }
 
 struct ImportedCache {
-    catalog: Catalog,
+    catalog: RwLock<Catalog>,
+    writer: Option<Mutex<WorkingStore>>,
     rejected: Mutex<HashSet<FileId>>,
 }
 struct Reader(StorageFile);
@@ -45,11 +50,37 @@ impl CacheBackend for ImportedCache {
             return Ok(None);
         }
         self.catalog
+            .read()
+            .unwrap()
             .open_audio(&file.0)
             .map(|file| file.map(|file| Box::new(Reader(file)) as Box<dyn CachedReader>))
     }
     fn reject(&self, file: FileId) {
         self.rejected.lock().unwrap().insert(file);
+    }
+    fn writable(&self) -> bool {
+        self.writer.is_some()
+    }
+    fn store(&self, file: FileId, source: &mut dyn CacheSource) -> io::Result<()> {
+        let Some(writer) = &self.writer else {
+            return Ok(());
+        };
+        let length = u32::try_from(source.seek(SeekFrom::End(0))?)
+            .map_err(|_| io::Error::other("audio file exceeds native storage size"))?;
+        source.seek(SeekFrom::Start(0))?;
+        let timestamp = u32::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(io::Error::other)?
+                .as_secs(),
+        )
+        .map_err(io::Error::other)?;
+        let mut writer = writer.lock().unwrap();
+        writer.write_audio(file.0, rand::random(), length, timestamp, source, &[])?;
+        *self.catalog.write().unwrap() = writer.catalog();
+        self.rejected.lock().unwrap().remove(&file);
+        eprintln!("Stored completed audio in desktop cache: {length} bytes");
+        Ok(())
     }
 }
 
@@ -72,15 +103,30 @@ fn install() -> Result<usize> {
     };
     let profile: Profile =
         serde_json::from_reader(std::fs::File::open(path)?).context("invalid storage profile")?;
-    let catalog = Catalog::open(
-        &profile.snapshot_root,
-        &decode_hex(&profile.storage_key_hex)?,
-        decode_hex(&profile.naming_state_hex)?,
-    )?;
+    let key = decode_hex(&profile.storage_key_hex)?;
+    let naming_state = decode_hex(&profile.naming_state_hex)?;
+    let catalog = Catalog::open(&profile.snapshot_root, &key, naming_state)?;
     let count = catalog.audio_count();
+    let writer = if profile.writable {
+        let original = PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA")?)
+            .join("Spotify");
+        match WorkingStore::open_copy(&profile.snapshot_root, &original, &key, naming_state) {
+            Ok(writer) => {
+                eprintln!("Desktop audio cache writes enabled in separate working copy");
+                Some(Mutex::new(writer))
+            }
+            Err(error) => {
+                eprintln!("Desktop cache writes unavailable; retaining read-only import: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     anyhow::ensure!(
         set_cache_backend(Arc::new(ImportedCache {
-            catalog,
+            catalog: RwLock::new(catalog),
+            writer,
             rejected: Mutex::new(HashSet::new())
         })),
         "audio cache backend already installed"
@@ -94,7 +140,7 @@ pub fn initialize() {
     INITIALIZED.get_or_init(|| match install() {
         Ok(0) => {}
         Ok(count) => {
-            eprintln!("Imported desktop audio cache enabled: {count} complete entries (read only)")
+            eprintln!("Imported desktop audio cache enabled: {count} complete entries")
         }
         Err(error) => eprintln!("Imported desktop audio cache unavailable: {error:#}"),
     });

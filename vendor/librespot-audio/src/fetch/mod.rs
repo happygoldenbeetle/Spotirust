@@ -409,6 +409,10 @@ impl AudioFile {
         session.spawn(complete_rx.map_ok(move |mut file| {
             debug!("Downloading file {file_id} complete");
 
+            if let Err(e) = crate::cache_backend::store_completed_file(file_id, file.as_file_mut()) {
+                error!("Error writing desktop audio cache for {file_id}: {e}");
+            }
+
             if let Some(cache) = session_.cache() {
                 if let Some(cache_id) = cache.file_path(file_id) {
                     if let Err(e) = cache.save_file(file_id, &mut file) {

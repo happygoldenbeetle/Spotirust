@@ -12,9 +12,13 @@ Native comparison covers synthetic record encryption and decryption, synthetic p
 
 `complete::write_complete` writes complete payloads, metadata, chunk checksums, and native footers into a caller supplied output stream. It reproduces the native encrypted or plaintext layout and preserves unknown footer fields. It does not open files, publish an index, or enable application cache writes. Local comparison reproduced all 656 complete files in a copied cache byte for byte (2,514,898,757 bytes and 153,617 chunks). These counts describe this verification dataset, not all Spotify caches.
 
+`store::WorkingStore` publishes complete audio files and encrypted index records. It can create a new directory or exclusively open a distinct copy whose header matches an original opened read only. It rejects overlapping roots, index junctions outside the copy, and hard linked original indexes. It never deletes files or overwrites an existing registered audio entry. Failed writes stop further publication and retain unpublished files for inspection. Two newly written entries were retained by an isolated reference client and read back through the playback adapter.
+
 Set `SPOTIRUST_STORAGE_PROFILE` to a private local JSON file with `snapshot_root`, `storage_key_hex` (32 hex characters), and `naming_state_hex` (40 hex characters). No discovery or state extraction runs automatically. Keep this file outside version control. The snapshot is never passed to librespot's writable cache.
 
-Not implemented or verified: automatic initialization from a pasted cache alone, partial file availability maps, file allocation and locking, live configuration overrides and cleanup scheduling, cache transactions, or bidirectional application interoperability. The writer and eviction planner are not yet registered as the application's write backend. No cache deletion runs automatically.
+An explicit `writable: true` enables the experimental completed download callback into a separate working copy. This is used only in the disposable write tests so far. Caps and cleanup are not scheduled by that callback yet; partial entry replacement is also pending. The original index is opened read only solely to validate that the writable index is separate and has a matching header. Failure to enable writes retains imported playback.
+
+Not implemented or verified: automatic initialization from a pasted cache alone, partial file availability maps, live configuration overrides and cleanup scheduling, crash recovery after an interrupted index write, or full bidirectional application playback interoperability. The eviction planner is not yet scheduled by the application. No cache deletion runs automatically.
 
 Run checks with:
 

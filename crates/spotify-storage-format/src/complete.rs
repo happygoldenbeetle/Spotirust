@@ -101,7 +101,7 @@ impl Trailer {
 /// destination creation, publication, locking, and the corresponding index update.
 /// An error can leave partial output; never pass an existing cache file as output.
 pub fn write_complete(
-    source: &mut impl Read,
+    source: &mut (impl Read + ?Sized),
     destination: &mut impl Write,
     record: &IndexRecord,
     cipher: &StorageCipher,

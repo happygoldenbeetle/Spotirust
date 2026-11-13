@@ -21,6 +21,24 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    pub(crate) fn from_records(
+        root: PathBuf,
+        cipher: Arc<StorageCipher>,
+        naming_state: [u8; 20],
+        records: &[IndexRecord],
+    ) -> Self {
+        let audio = records
+            .iter()
+            .filter(|r| r.realm() == 0 && r.flags() == 7 && r.logical_size() > 0)
+            .map(|r| (*r.file_id(), r.clone()))
+            .collect();
+        Self {
+            root,
+            cipher,
+            naming_state,
+            audio,
+        }
+    }
     pub fn open(root: &Path, key: &[u8; 16], naming_state: [u8; 20]) -> io::Result<Self> {
         let root = root.canonicalize()?;
         let mut index = File::open(root.join("Storage/index.dat"))?;

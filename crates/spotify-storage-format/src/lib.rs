@@ -17,6 +17,7 @@ pub mod complete;
 pub mod policy;
 mod policy_sort;
 pub mod reader;
+pub mod store;
 
 pub const INDEX_HEADER_SIZE: usize = 512;
 pub const INDEX_RECORD_SIZE: usize = 64;
