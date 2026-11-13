@@ -112,9 +112,18 @@ fn cache_path(url: &str) -> Option<std::path::PathBuf> {
 }
 
 fn cached_download(url: &str) -> anyhow::Result<Vec<u8>> {
-    let path = cache_path(url);
+    // Test switches: SPOTIRUST_NO_IMAGE_CACHE skips our own disk cache, SPOTIRUST_NO_IMAGE_DOWNLOAD
+    // the network (so only the official client's cache can supply a cover).
+    let path = cache_path(url).filter(|_| std::env::var_os("SPOTIRUST_NO_IMAGE_CACHE").is_none());
     if let Some(bytes) = path.as_ref().and_then(|p| std::fs::read(p).ok()) {
         return Ok(bytes);
+    }
+    // Covers the official client already has (its cache, copied here or in place).
+    if let Some(bytes) = crate::spotify_cache::image(url) {
+        return Ok(bytes);
+    }
+    if std::env::var_os("SPOTIRUST_NO_IMAGE_DOWNLOAD").is_some() {
+        anyhow::bail!("downloads off");
     }
     let bytes = download(url)?;
     if let Some(p) = path {

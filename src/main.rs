@@ -19,6 +19,7 @@ mod login;
 mod shell;
 mod spotify;
 mod spotify_assets;
+mod spotify_cache;
 mod theme;
 mod titlebar;
 
@@ -131,6 +132,7 @@ fn main() {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         load_fonts(cx);
         images::init(cx);
+        spotify_cache::warm_up();
 
         // The reference client's default size, shrunk to fit the primary display (at 125% a
         // 1920x1080 screen is only 1536x864 logical) so the window always opens fully on screen.
