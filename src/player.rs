@@ -87,7 +87,8 @@ impl LocalPlayer {
             let session = Session::new(SessionConfig { device_id: device_id.clone(), ..SessionConfig::default() }, Some(cache));
 
             let sink_out = out.clone();
-            let player = Player::new(PlayerConfig::default(), session.clone(), mixer.get_soft_volume(), move || {
+            let bitrate=crate::audio_cache::preferred_bitrate(credentials.username.as_deref()).unwrap_or_default();
+            let player = Player::new(PlayerConfig{bitrate,..PlayerConfig::default()}, session.clone(), mixer.get_soft_volume(), move || {
                 Box::new(OutSink(sink_out))
             });
 
