@@ -1751,6 +1751,7 @@ impl Interactivity {
             // were removed or the bounds became larger).
             let cell = scroll_offset.clone();
             let mut scroll_offset = scroll_offset.borrow_mut();
+            smooth_set_max(&cell, scroll_max);
             if smooth_step(&cell, &mut scroll_offset, scroll_max) {
                 window.request_animation_frame();
             }
@@ -3304,48 +3305,211 @@ impl ScrollHandle {
 
 // ---- Smooth wheel scrolling (Chromium-style) ----------------------------------------------------
 // A mouse wheel notch (a `ScrollDelta::Lines` event) doesn't jump: it sets a target and the offset
-// eases there over a short animation, like Chromium's wheel scrolling. Trackpads (pixel deltas)
-// still scroll directly. Keyed by the address of the element's shared offset cell.
+// glides there, the way Chromium animates wheel scrolls (cc/animation/scroll_offset_animation_curve):
+// an ease-in-out curve whose length depends on the distance (200ms for one notch, down to 100ms for
+// big jumps), and a notch during a glide extends the target while keeping the current speed, so a
+// spinning wheel scrolls in one continuous motion. Trackpads (pixel deltas) still scroll directly.
+// Keyed by the address of the element's shared offset cell.
 
 /// Chromium on Windows: 100px per notch at the default 3 lines.
 const SMOOTH_PX_PER_LINE: f32 = 100. / 3.;
-const SMOOTH_DURATION: std::time::Duration = std::time::Duration::from_millis(160);
 
 struct SmoothScroll {
     from: Point<Pixels>,
     target: Point<Pixels>,
     start: std::time::Instant,
+    /// Seconds.
+    duration: f32,
+    /// First control point's y of the curve cubic-bezier(0.42, y1, 0.58, 1); 0 is plain ease-in-out.
+    y1: f32,
     /// The value last written, so an outside change (set_offset, scrollbar drag) cancels the animation.
     written: Point<Pixels>,
 }
 
 thread_local! {
     static SMOOTH: RefCell<HashMap<usize, SmoothScroll>> = RefCell::new(HashMap::default());
+    /// Each scroller's latest scroll range, so a wheel notch can clamp its target like Chromium does.
+    static SMOOTH_MAX: RefCell<HashMap<usize, Size<Pixels>>> = RefCell::new(HashMap::default());
+}
+
+fn smooth_set_max(cell: &Rc<RefCell<Point<Pixels>>>, max: Size<Pixels>) {
+    SMOOTH_MAX.with(|m| {
+        m.borrow_mut().insert(smooth_key(cell), max);
+    });
+}
+
+fn smooth_max(cell: &Rc<RefCell<Point<Pixels>>>) -> Size<Pixels> {
+    SMOOTH_MAX.with(|m| m.borrow().get(&smooth_key(cell)).copied())
+        .unwrap_or(size(px(f32::MAX), px(f32::MAX)))
 }
 
 fn smooth_key(cell: &Rc<RefCell<Point<Pixels>>>) -> usize {
     Rc::as_ptr(cell) as *const () as usize
 }
 
-/// Ease-out (close to Chromium's impulse curve for wheel scrolls).
-fn smooth_ease(t: f32) -> f32 {
-    1. - (1. - t).powi(3)
+fn smooth_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SPOTIRUST_SCROLL_LOG").is_some())
 }
 
-/// Starts or retargets the animation for a wheel notch: a notch during an animation adds to its target.
+const SMOOTH_X1: f32 = 0.42;
+const SMOOTH_X2: f32 = 0.58;
+
+fn bezier(a: f32, b: f32, s: f32) -> f32 {
+    // One axis of a cubic Bézier from (0,0) to (1,1) with control values a, b.
+    let r = 1. - s;
+    3. * r * r * s * a + 3. * r * s * s * b + s * s * s
+}
+
+fn bezier_d(a: f32, b: f32, s: f32) -> f32 {
+    let r = 1. - s;
+    3. * r * r * a + 6. * r * s * (b - a) + 3. * s * s * (1. - b)
+}
+
+/// The curve's parameter at time fraction `x`.
+fn smooth_param(x: f32) -> f32 {
+    let x = x.clamp(0., 1.);
+    let mut s = x;
+    for _ in 0..8 {
+        let d = bezier_d(SMOOTH_X1, SMOOTH_X2, s);
+        if d.abs() < 1e-6 {
+            break;
+        }
+        s = (s - (bezier(SMOOTH_X1, SMOOTH_X2, s) - x) / d).clamp(0., 1.);
+    }
+    s
+}
+
+/// Progress (0..1, may overshoot slightly) at time fraction `x`.
+fn smooth_value(y1: f32, x: f32) -> f32 {
+    bezier(y1, 1., smooth_param(x))
+}
+
+/// d(progress)/d(time fraction) at time fraction `x`.
+fn smooth_velocity(y1: f32, x: f32) -> f32 {
+    let s = smooth_param(x);
+    let dx = bezier_d(SMOOTH_X1, SMOOTH_X2, s);
+    if dx.abs() < 1e-6 { 0. } else { bezier_d(y1, 1., s) / dx }
+}
+
+/// Chromium's kInverseDelta duration: 12 frames (200ms) up to 120px, ramping to 6 frames at 480px.
+fn smooth_duration(distance: f32) -> f32 {
+    let slope = (6. - 12.) / (480. - 120.);
+    let frames = (12. - 120. * slope + distance.abs() * slope).clamp(6., 12.);
+    frames / 60.
+}
+
+/// The component with the larger magnitude, keeping its sign.
+fn max_dimension(p: Point<Pixels>) -> f32 {
+    let (x, y) = (f32::from(p.x), f32::from(p.y));
+    if x.abs() > y.abs() { x } else { y }
+}
+
+fn smooth_at(a: &SmoothScroll, target: Point<Pixels>) -> (Point<Pixels>, f32) {
+    let t = (a.start.elapsed().as_secs_f32() / a.duration).min(1.);
+    let k = smooth_value(a.y1, t);
+    (point(a.from.x + (target.x - a.from.x) * k, a.from.y + (target.y - a.from.y) * k), t)
+}
+
+/// Starts or retargets the animation for a wheel notch: a notch during a glide adds to its target
+/// and keeps the glide's speed (Chromium's UpdateTarget).
 fn smooth_push(cell: &Rc<RefCell<Point<Pixels>>>, current: Point<Pixels>, delta: Point<Pixels>) {
+    let max = smooth_max(cell);
     SMOOTH.with(|m| {
         let mut m = m.borrow_mut();
         let key = smooth_key(cell);
-        let base = match m.get(&key) {
-            Some(a) if a.written == current => a.target,
-            _ => current,
-        };
-        m.insert(
-            key,
-            SmoothScroll { from: current, target: base + delta, start: std::time::Instant::now(), written: current },
-        );
+        let clamp = |p: Point<Pixels>| point(p.x.clamp(-max.width, px(0.)), p.y.clamp(-max.height, px(0.)));
+        let running = m.get(&key).filter(|a| a.written == current);
+        let base = running.map_or(current, |a| a.target);
+        let target = clamp(base + delta);
+        let new_delta = max_dimension(target - current);
+        if new_delta.abs() < 0.01 {
+            m.remove(&key);
+            return;
+        }
+        let mut duration = smooth_duration(new_delta);
+        let mut y1 = 0.;
+        if let Some(a) = running {
+            let t = (a.start.elapsed().as_secs_f32() / a.duration).min(1.);
+            let old_delta = max_dimension(a.target - a.from);
+            // Speed in px/s along the main axis, signed.
+            let velocity = smooth_velocity(a.y1, t) * old_delta / a.duration;
+            if velocity.abs() > 1e-3 {
+                let bound = new_delta / velocity * 2.5;
+                if bound > 0. {
+                    duration = duration.min(bound);
+                }
+                let slope = (velocity * duration / new_delta).clamp(-1000., 1000.);
+                y1 = SMOOTH_X1 * slope;
+            }
+        }
+        m.insert(key, SmoothScroll { from: current, target, start: std::time::Instant::now(), duration, y1, written: current });
     });
+}
+
+/// A one-axis wheel glide for views that scroll themselves, with the same Chromium curve as
+/// overflow scrollers: `push` a wheel delta (px; positive moves the offset up), read `value`.
+#[derive(Clone, Debug, Default)]
+pub struct ScrollGlide {
+    from: f32,
+    target: f32,
+    start: Option<std::time::Instant>,
+    duration: f32,
+    y1: f32,
+}
+
+impl ScrollGlide {
+    /// Pixels a `ScrollDelta::Lines` unit scrolls (Chromium on Windows: 100px a notch).
+    pub const PX_PER_LINE: f32 = SMOOTH_PX_PER_LINE;
+
+    /// Starts or extends the glide from `current` by `delta`, keeping the target within `lo..=hi`.
+    pub fn push(&mut self, current: f32, delta: f32, lo: f32, hi: f32) {
+        let running = self.running();
+        let base = if running { self.target } else { current };
+        let target = (base + delta).clamp(lo, hi);
+        let new_delta = target - current;
+        let mut duration = smooth_duration(new_delta);
+        let mut y1 = 0.;
+        if running {
+            let t = self.fraction();
+            let velocity = smooth_velocity(self.y1, t) * (self.target - self.from) / self.duration;
+            if velocity.abs() > 1e-3 && new_delta.abs() > 0.01 {
+                let bound = new_delta / velocity * 2.5;
+                if bound > 0. {
+                    duration = duration.min(bound);
+                }
+                y1 = SMOOTH_X1 * (velocity * duration / new_delta).clamp(-1000., 1000.);
+            }
+        }
+        *self = ScrollGlide { from: current, target, start: Some(std::time::Instant::now()), duration, y1 };
+    }
+
+    fn fraction(&self) -> f32 {
+        self.start.map_or(1., |s| (s.elapsed().as_secs_f32() / self.duration.max(1e-3)).min(1.))
+    }
+
+    /// True until the glide reaches its target.
+    pub fn running(&self) -> bool {
+        self.start.is_some() && self.fraction() < 1.
+    }
+
+    /// Where the glide is heading.
+    pub fn target(&self) -> f32 {
+        self.target
+    }
+
+    /// The current position.
+    pub fn value(&self) -> f32 {
+        if !self.running() {
+            return self.target;
+        }
+        self.from + (self.target - self.from) * smooth_value(self.y1, self.fraction())
+    }
+
+    /// Stops the glide where it is.
+    pub fn stop(&mut self) {
+        self.start = None;
+    }
 }
 
 /// Advances a running animation for this offset (clamped to `max`); true while it continues.
@@ -3359,12 +3523,15 @@ fn smooth_step(cell: &Rc<RefCell<Point<Pixels>>>, offset: &mut Point<Pixels>, ma
             return false;
         }
         let target = point(a.target.x.clamp(-max.width, px(0.)), a.target.y.clamp(-max.height, px(0.)));
-        let t = (a.start.elapsed().as_secs_f32() / SMOOTH_DURATION.as_secs_f32()).min(1.);
-        let k = smooth_ease(t);
-        let v = point(a.from.x + (target.x - a.from.x) * k, a.from.y + (target.y - a.from.y) * k);
+        let (v, t) = smooth_at(a, target);
+        let v = point(v.x.clamp(-max.width, px(0.)), v.y.clamp(-max.height, px(0.)));
         *offset = v;
         a.written = v;
+        if smooth_log() {
+            eprintln!("smooth {key:x} t={:.3} y={:.1} target={:.1}", a.start.elapsed().as_secs_f32(), f32::from(v.y), f32::from(target.y));
+        }
         if t >= 1. {
+            *offset = target;
             m.remove(&key);
             false
         } else {

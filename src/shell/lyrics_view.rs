@@ -46,6 +46,8 @@ pub struct LyricsScroll {
     /// The user scrolled: stop following until the next line starts.
     pub manual_until_line: Option<usize>,
     pub last_frame: Option<Instant>,
+    /// Wheel scrolling glides like the client's (Chromium) scrollers.
+    pub glide: gpui::ScrollGlide,
 }
 
 impl Shell {
@@ -133,7 +135,14 @@ impl Shell {
         let dt = st.last_frame.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.016).min(0.1);
         st.last_frame = Some(Instant::now());
         let k = 1. - (-dt * 10.).exp();
-        st.offset += (st.target - st.offset) * k;
+        if st.manual_until_line.is_some() && st.glide.running() {
+            st.offset = st.glide.value();
+            st.target = st.glide.target();
+            window.request_animation_frame();
+        } else {
+            st.glide.stop();
+            st.offset += (st.target - st.offset) * k;
+        }
         if (st.target - st.offset).abs() < 0.5 {
             st.offset = st.target;
         } else {
@@ -210,12 +219,19 @@ impl Shell {
             .bg(c(bg))
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| {
                 let dy = match ev.delta {
-                    ScrollDelta::Lines(p) => p.y * 40.,
+                    ScrollDelta::Lines(p) => p.y * gpui::ScrollGlide::PX_PER_LINE,
                     ScrollDelta::Pixels(p) => f32::from(p.y),
                 };
                 let st = &mut this.lyrics_scroll;
-                st.target = (st.target - dy).max(0.);
-                st.offset = st.target;
+                if matches!(ev.delta, ScrollDelta::Lines(_)) {
+                    let off = st.offset;
+                    st.glide.push(off, -dy, 0., f32::MAX);
+                    st.target = st.glide.target();
+                } else {
+                    st.glide.stop();
+                    st.target = (st.target - dy).max(0.);
+                    st.offset = st.target;
+                }
                 let cur = this.lyrics.as_ref().and_then(|l| l.1.as_ref()).and_then(|l| Self::active_line(&l.timed, this.progress_ms()));
                 this.lyrics_scroll.manual_until_line = cur.or(Some(usize::MAX));
                 cx.notify();
