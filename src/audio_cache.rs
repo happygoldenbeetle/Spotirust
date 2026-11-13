@@ -1,6 +1,8 @@
 //! Explicit desktop cache snapshot integration. Writes require a separate copy.
 use anyhow::{Context, Result};
-use librespot_audio::cache_backend::{CacheBackend, CacheSource, CachedReader, set_cache_backend};
+use librespot_audio::cache_backend::{
+    CacheBackend, CacheSource, CachedReader, PartialReader, set_cache_backend,
+};
 use librespot_core::FileId;
 use serde::Deserialize;
 use spotify_storage_format::reader::{Catalog, StorageFile};
@@ -44,6 +46,11 @@ impl CachedReader for Reader {
         self.0.len()
     }
 }
+impl PartialReader for Reader {
+    fn available_ranges(&self) -> Vec<(u64, u64)> {
+        self.0.available_ranges()
+    }
+}
 impl CacheBackend for ImportedCache {
     fn open(&self, file: FileId) -> io::Result<Option<Box<dyn CachedReader>>> {
         if self.rejected.lock().unwrap().contains(&file) {
@@ -57,6 +64,16 @@ impl CacheBackend for ImportedCache {
     }
     fn reject(&self, file: FileId) {
         self.rejected.lock().unwrap().insert(file);
+    }
+    fn partial(&self, file: FileId) -> io::Result<Option<Box<dyn PartialReader>>> {
+        if self.rejected.lock().unwrap().contains(&file) {
+            return Ok(None);
+        }
+        self.catalog
+            .read()
+            .unwrap()
+            .open_partial_audio(&file.0)
+            .map(|file| file.map(|file| Box::new(Reader(file)) as Box<dyn PartialReader>))
     }
     fn writable(&self) -> bool {
         self.writer.is_some()

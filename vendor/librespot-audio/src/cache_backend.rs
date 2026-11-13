@@ -8,10 +8,17 @@ use std::{
 pub trait CachedReader: Read + Seek + Send + Sync {
     fn byte_len(&self) -> u64;
 }
+pub trait PartialReader: CachedReader {
+    /// Logical byte ranges containing verified cache chunks, as (start, length).
+    fn available_ranges(&self) -> Vec<(u64, u64)>;
+}
 pub trait CacheSource: Read + Seek {}
 impl<T: Read + Seek> CacheSource for T {}
 pub trait CacheBackend: Send + Sync {
     fn open(&self, file: FileId) -> io::Result<Option<Box<dyn CachedReader>>>;
+    fn partial(&self, _file: FileId) -> io::Result<Option<Box<dyn PartialReader>>> {
+        Ok(None)
+    }
     /// Reject for this process only. Implementations must not delete imported data.
     fn reject(&self, file: FileId);
     fn writable(&self) -> bool {
@@ -27,6 +34,12 @@ pub fn set_cache_backend(backend: Arc<dyn CacheBackend>) -> bool {
 }
 pub(crate) fn backend() -> Option<&'static Arc<dyn CacheBackend>> {
     BACKEND.get()
+}
+pub fn open_cached_file(file: FileId) -> io::Result<Option<Box<dyn CachedReader>>> {
+    match backend() {
+        Some(backend) => backend.open(file),
+        None => Ok(None),
+    }
 }
 pub fn reject_cached_file(file: FileId) {
     if let Some(backend) = backend() {

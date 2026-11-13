@@ -130,7 +130,8 @@ impl WorkingStore {
     }
 
     /// Publishes a complete encrypted CDN stream. Does not decrypt stream audio,
-    /// overwrite an existing entry, delete anything, or run cleanup automatically.
+    /// overwrite an existing complete entry, delete anything, or run cleanup automatically.
+    /// A partial index entry can be completed by publishing a new file version.
     /// On failure, unpublished files remain for inspection and further writes stop.
     pub fn write_audio(
         &mut self,
@@ -146,11 +147,12 @@ impl WorkingStore {
                 "storage writer stopped after a previous I/O failure",
             ));
         }
-        if self
+        let previous_slot = self
             .records
             .iter()
-            .any(|r| r.realm() == 0 && r.file_id() == &file_id)
-        {
+            .position(|r| r.realm() == 0 && r.file_id() == &file_id);
+        let previous = previous_slot.map(|slot| self.records[slot].clone());
+        if previous.as_ref().is_some_and(|record| record.flags() != 6) {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "audio entry already exists",
@@ -159,13 +161,28 @@ impl WorkingStore {
         if logical_size == 0 || logical_size > i32::MAX as u32 {
             return Err(invalid("unsupported audio length"));
         }
+        let inherited = if previous.is_some() && metadata.is_empty() {
+            self.catalog()
+                .open_partial_audio(&file_id)?
+                .map(|file| file.storage_metadata().to_vec())
+        } else {
+            None
+        };
+        let metadata = inherited.as_deref().unwrap_or(metadata);
         let metadata_length =
             u32::try_from(metadata.len()).map_err(|_| invalid("storage metadata too large"))?;
         let stored_size = complete::stored_size(logical_size, metadata_length)?;
         if stored_size > i32::MAX as u32 {
             return Err(invalid("unsupported physical audio length"));
         }
-        let record = new_audio_record(file_id, version, logical_size, stored_size, timestamp)?;
+        let record = new_audio_record(
+            previous.as_ref(),
+            file_id,
+            version,
+            logical_size,
+            stored_size,
+            timestamp,
+        )?;
         // All writes target names derived from fixed-size identifiers inside this
         // newly created root. Reject junctions introduced after initialization.
         let name = cache_file_name(&self.naming_state, &file_id, 0, version);
@@ -187,8 +204,8 @@ impl WorkingStore {
             .write(true)
             .create_new(true)
             .open(directory.join(name))?;
-        let slot =
-            u32::try_from(self.records.len()).map_err(|_| invalid("storage index too large"))?;
+        let slot = u32::try_from(previous_slot.unwrap_or(self.records.len()))
+            .map_err(|_| invalid("storage index too large"))?;
         let result = (|| {
             complete::write_complete(source, &mut file, &record, &self.cipher, metadata, &[0; 24])?;
             file.sync_all()?;
@@ -203,7 +220,11 @@ impl WorkingStore {
             self.failed = true;
             return Err(error);
         }
-        self.records.push(record);
+        if let Some(slot) = previous_slot {
+            self.records[slot] = record;
+        } else {
+            self.records.push(record);
+        }
         Ok(())
     }
 
@@ -218,21 +239,24 @@ impl WorkingStore {
 }
 
 fn new_audio_record(
+    previous: Option<&IndexRecord>,
     file_id: [u8; 20],
     version: u16,
     logical: u32,
     stored: u32,
     timestamp: u32,
 ) -> io::Result<IndexRecord> {
-    let mut raw = [0; INDEX_RECORD_SIZE];
+    let mut raw = previous.map_or([0; INDEX_RECORD_SIZE], |record| *record.as_bytes());
     raw[4..8].copy_from_slice(&0xdeadbeef_u32.to_be_bytes());
     raw[8..28].copy_from_slice(&file_id);
     raw[30..32].copy_from_slice(&version.to_be_bytes());
     raw[32..36].copy_from_slice(&7_u32.to_be_bytes());
     raw[36..40].copy_from_slice(&logical.to_be_bytes());
-    raw[40..44].copy_from_slice(&timestamp.to_be_bytes());
+    if previous.is_none() {
+        raw[40..44].copy_from_slice(&timestamp.to_be_bytes());
+        raw[48] = 1;
+    }
     raw[44..48].copy_from_slice(&stored.to_be_bytes());
-    raw[48] = 1;
     raw[52..56].copy_from_slice(&timestamp.to_be_bytes());
     let checksum = adler32(1, &raw[4..]);
     raw[..4].copy_from_slice(&checksum.to_be_bytes());

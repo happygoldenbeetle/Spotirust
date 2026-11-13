@@ -383,15 +383,13 @@ impl AudioFile {
         file_id: FileId,
         bytes_per_second: usize,
     ) -> Result<AudioFile, Error> {
-        if let Some(backend) = crate::cache_backend::backend() {
-            match backend.open(file_id) {
-                Ok(Some(file)) => {
-                    debug!("File {file_id} opened from imported desktop storage");
-                    return Ok(AudioFile::Imported(file));
-                }
-                Ok(None) => {},
-                Err(e) => warn!("Imported cache entry {file_id} unavailable: {e}"),
+        match crate::cache_backend::open_cached_file(file_id) {
+            Ok(Some(file)) => {
+                debug!("File {file_id} opened from imported desktop storage");
+                return Ok(AudioFile::Imported(file));
             }
+            Ok(None) => {}
+            Err(e) => warn!("Imported cache entry {file_id} unavailable: {e}"),
         }
         if let Some(file) = session.cache().and_then(|cache| cache.file(file_id)) {
             debug!("File {file_id} already in cache");
@@ -409,7 +407,8 @@ impl AudioFile {
         session.spawn(complete_rx.map_ok(move |mut file| {
             debug!("Downloading file {file_id} complete");
 
-            if let Err(e) = crate::cache_backend::store_completed_file(file_id, file.as_file_mut()) {
+            if let Err(e) = crate::cache_backend::store_completed_file(file_id, file.as_file_mut())
+            {
                 error!("Error writing desktop audio cache for {file_id}: {e}");
             }
 
@@ -453,7 +452,152 @@ impl AudioFile {
         matches!(self, AudioFile::Cached { .. } | AudioFile::Imported(_))
     }
 
-    pub fn is_imported(&self) -> bool { matches!(self, AudioFile::Imported(_)) }
+    pub fn is_imported(&self) -> bool {
+        matches!(self, AudioFile::Imported(_))
+    }
+}
+
+fn seed_partial(file_id: FileId, output: &mut fs::File) -> io::Result<Option<(usize, RangeSet)>> {
+    let Some(backend) = crate::cache_backend::backend() else {
+        return Ok(None);
+    };
+    let Some(mut reader) = backend.partial(file_id)? else {
+        return Ok(None);
+    };
+    let seeded = seed_reader(&mut *reader, output)?;
+    if let Some((_, ranges)) = &seeded {
+        debug!(
+            "Reused {} bytes of partial desktop cache for {file_id}",
+            ranges.len()
+        );
+    }
+    Ok(seeded)
+}
+
+fn seed_reader(
+    reader: &mut dyn crate::cache_backend::PartialReader,
+    output: &mut fs::File,
+) -> io::Result<Option<(usize, RangeSet)>> {
+    let file_size = usize::try_from(reader.byte_len()).map_err(io::Error::other)?;
+    let mut ranges = RangeSet::new();
+    for (start, length) in reader.available_ranges() {
+        let start = usize::try_from(start).map_err(io::Error::other)?;
+        let length = usize::try_from(length).map_err(io::Error::other)?;
+        if start.checked_add(length).is_none_or(|end| end > file_size) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "partial cache range exceeds audio length",
+            ));
+        }
+        if length > 0 {
+            ranges.add_range(&Range::new(start, length));
+        }
+    }
+    if ranges.is_empty() {
+        return Ok(None);
+    }
+    output.set_len(file_size as u64)?;
+    for range in ranges.iter() {
+        reader.seek(SeekFrom::Start(range.start as u64))?;
+        output.seek(SeekFrom::Start(range.start as u64))?;
+        let count = io::copy(&mut (&mut *reader).take(range.length as u64), output)?;
+        if count != range.length as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "partial cache range is truncated",
+            ));
+        }
+    }
+    Ok(Some((file_size, ranges)))
+}
+
+fn first_missing_range(seeded: Option<&(usize, RangeSet)>, minimum: usize) -> Range {
+    if let Some((size, ranges)) = seeded {
+        let mut missing = RangeSet::new();
+        missing.add_range(&Range::new(0, *size));
+        missing.subtract_range_set(ranges);
+        if let Some(range) = missing.iter().next() {
+            return Range::new(range.start, range.length.min(minimum));
+        }
+    }
+    Range::new(0, minimum)
+}
+
+#[cfg(test)]
+mod partial_import_tests {
+    use super::*;
+    use crate::cache_backend::{CachedReader, PartialReader};
+    struct Input {
+        source: io::Cursor<Vec<u8>>,
+        length: u64,
+        ranges: Vec<(u64, u64)>,
+    }
+    impl Read for Input {
+        fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+            self.source.read(b)
+        }
+    }
+    impl Seek for Input {
+        fn seek(&mut self, p: SeekFrom) -> io::Result<u64> {
+            self.source.seek(p)
+        }
+    }
+    impl CachedReader for Input {
+        fn byte_len(&self) -> u64 {
+            self.length
+        }
+    }
+    impl PartialReader for Input {
+        fn available_ranges(&self) -> Vec<(u64, u64)> {
+            self.ranges.clone()
+        }
+    }
+    #[test]
+    fn seeded_ranges_skip_cached_bytes_in_the_initial_network_request() {
+        let bytes: Vec<_> = (0..64).collect();
+        let mut input = Input {
+            source: io::Cursor::new(bytes.clone()),
+            length: 64,
+            ranges: vec![(32, 16), (0, 8), (8, 8)],
+        };
+        let mut output = NamedTempFile::new().unwrap();
+        let seeded = seed_reader(&mut input, output.as_file_mut())
+            .unwrap()
+            .unwrap();
+        assert_eq!(seeded.0, 64);
+        assert_eq!(seeded.1.len(), 32);
+        let first = first_missing_range(Some(&seeded), 64);
+        assert_eq!((first.start, first.length), (16, 16));
+        output.rewind().unwrap();
+        let mut actual = Vec::new();
+        output.read_to_end(&mut actual).unwrap();
+        assert_eq!(&actual[..16], &bytes[..16]);
+        assert_eq!(&actual[16..32], &[0; 16]);
+        assert_eq!(&actual[32..48], &bytes[32..48]);
+        assert_eq!(&actual[48..], &[0; 16]);
+    }
+    #[test]
+    fn malformed_and_truncated_ranges_are_not_published_as_available() {
+        let mut output = NamedTempFile::new().unwrap();
+        let mut invalid = Input {
+            source: io::Cursor::new(vec![1; 64]),
+            length: 64,
+            ranges: vec![(63, 2)],
+        };
+        assert!(seed_reader(&mut invalid, output.as_file_mut()).is_err());
+        assert_eq!(output.as_file().metadata().unwrap().len(), 0);
+        let mut short = Input {
+            source: io::Cursor::new(vec![1; 12]),
+            length: 64,
+            ranges: vec![(0, 16)],
+        };
+        assert_eq!(
+            seed_reader(&mut short, output.as_file_mut())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
 }
 
 impl AudioFileStreaming {
@@ -465,7 +609,23 @@ impl AudioFileStreaming {
     ) -> Result<AudioFileStreaming, Error> {
         let cdn_url = CdnUrl::new(file_id).resolve_audio(&session).await?;
 
+        let mut write_file = NamedTempFile::new_in(session.config().tmp_dir.clone())?;
+        let seeded = match seed_partial(file_id, write_file.as_file_mut()) {
+            Ok(value) => value,
+            Err(error) => {
+                warn!("Unable to reuse partial cache for {file_id}: {error}");
+                None
+            }
+        };
+
         let minimum_download_size = AudioFetchParams::get().minimum_download_size;
+        let initial_range = first_missing_range(seeded.as_ref(), minimum_download_size);
+        if seeded.is_some() {
+            debug!(
+                "Partial cache first missing range: {} + {}",
+                initial_range.start, initial_range.length
+            );
+        }
 
         let mut response_streamer_url = None;
         let urls = cdn_url.try_get_urls()?;
@@ -474,10 +634,11 @@ impl AudioFileStreaming {
             // larger than the audio file we're going to stream later on. This is OK; requesting
             // `Content-Range` > `Content-Length` will return the complete file with status code
             // 206 Partial Content.
-            let mut streamer =
-                session
-                    .spclient()
-                    .stream_from_cdn(*url, 0, minimum_download_size)?;
+            let mut streamer = session.spclient().stream_from_cdn(
+                *url,
+                initial_range.start,
+                initial_range.length,
+            )?;
 
             // Get the first chunk with the headers to get the file size.
             // The remainder of that chunk with possibly also a response body is then
@@ -520,13 +681,27 @@ impl AudioFileStreaming {
         let hyphen_index = str_value.find('-').unwrap_or_default();
         let slash_index = str_value.find('/').unwrap_or_default();
         let upper_bound: usize = str_value[hyphen_index + 1..slash_index].parse()?;
-        let file_size = str_value[slash_index + 1..].parse()?;
+        let lower_bound: usize = str_value[..hyphen_index]
+            .strip_prefix("bytes ")
+            .ok_or(AudioFileError::Header)?
+            .parse()?;
+        let file_size: usize = str_value[slash_index + 1..].parse()?;
+        if lower_bound != initial_range.start
+            || upper_bound < lower_bound
+            || upper_bound >= file_size
+        {
+            return Err(AudioFileError::Header.into());
+        }
+        let downloaded = match seeded {
+            Some((length, ranges)) if length == file_size => ranges,
+            _ => RangeSet::new(),
+        };
 
         let initial_request = StreamingRequest {
             streamer,
             initial_response: Some(response),
-            offset: 0,
-            length: upper_bound + 1,
+            offset: lower_bound,
+            length: upper_bound - lower_bound + 1,
         };
 
         let shared = Arc::new(AudioFileShared {
@@ -536,7 +711,7 @@ impl AudioFileStreaming {
             cond: Condvar::new(),
             download_status: Mutex::new(AudioFileDownloadStatus {
                 requested: RangeSet::new(),
-                downloaded: RangeSet::new(),
+                downloaded,
             }),
             download_streaming: AtomicBool::new(false),
             download_slots: Semaphore::new(1),
@@ -545,7 +720,6 @@ impl AudioFileStreaming {
             throughput: AtomicUsize::new(0),
         });
 
-        let write_file = NamedTempFile::new_in(session.config().tmp_dir.clone())?;
         write_file.as_file().set_len(file_size as u64)?;
 
         let read_file = write_file.reopen()?;

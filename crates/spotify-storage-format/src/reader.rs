@@ -29,7 +29,7 @@ impl Catalog {
     ) -> Self {
         let audio = records
             .iter()
-            .filter(|r| r.realm() == 0 && r.flags() == 7 && r.logical_size() > 0)
+            .filter(|r| r.realm() == 0 && matches!(r.flags(), 6 | 7) && r.logical_size() > 0)
             .map(|r| (*r.file_id(), r.clone()))
             .collect();
         Self {
@@ -62,9 +62,7 @@ impl Catalog {
             let record = cipher
                 .decode_record(slot, &bytes)
                 .map_err(|_| invalid("storage record validation failed"))?;
-            // Only the complete encrypted stream layout verified in desktop 1.3.8.620.
-            // Partial files and other realms must fall back to the network for now.
-            if record.realm() == 0 && record.flags() == 7 && record.logical_size() > 0 {
+            if record.realm() == 0 && matches!(record.flags(), 6 | 7) && record.logical_size() > 0 {
                 audio.insert(*record.file_id(), record);
             }
         }
@@ -77,13 +75,25 @@ impl Catalog {
     }
 
     pub fn audio_count(&self) -> usize {
-        self.audio.len()
+        self.audio.values().filter(|r| r.flags() == 7).count()
+    }
+    pub fn partial_audio_count(&self) -> usize {
+        self.audio.values().filter(|r| r.flags() == 6).count()
     }
 
     pub fn open_audio(&self, file_id: &[u8; 20]) -> io::Result<Option<StorageFile>> {
+        self.open_entry(file_id, 7)
+    }
+    pub fn open_partial_audio(&self, file_id: &[u8; 20]) -> io::Result<Option<StorageFile>> {
+        self.open_entry(file_id, 6)
+    }
+    fn open_entry(&self, file_id: &[u8; 20], flags: u32) -> io::Result<Option<StorageFile>> {
         let Some(record) = self.audio.get(file_id) else {
             return Ok(None);
         };
+        if record.flags() != flags {
+            return Ok(None);
+        }
         let name = cache_file_name(&self.naming_state, file_id, 0, record.version());
         let path = self.root.join("Data").join(&name[..2]).join(&name);
         // A snapshot must not redirect reads outside its root through junctions.
@@ -93,23 +103,25 @@ impl Catalog {
         }
         let mut file = File::open(path)?;
         let length = u64::from(record.logical_size());
-        if file.metadata()?.len() != u64::from(record.stored_size())
-            || u64::from(record.stored_size()) < length
-        {
+        let stored = u64::from(record.stored_size());
+        if file.metadata()?.len() != stored || stored < FOOTER_SIZE as u64 {
             return Err(invalid("storage entry length differs from index"));
         }
-        let tail_length = u64::from(record.stored_size()) - length;
-        let maximum_tail = 0xff_ffff
-            + u64::from(record.logical_size()).div_ceil(CHUNK_SIZE as u64) * 4
-            + FOOTER_SIZE as u64;
-        if tail_length > maximum_tail {
-            return Err(invalid("storage trailer exceeds layout bounds"));
-        }
         let iv = file_iv(file_id, 0, record.version());
-        let mut tail = vec![0; tail_length as usize];
-        file.seek(SeekFrom::Start(length))?;
+        let mut footer = [0; FOOTER_SIZE];
+        file.seek(SeekFrom::Start(stored - FOOTER_SIZE as u64))?;
+        file.read_exact(&mut footer)?;
+        self.cipher
+            .transform_payload(&iv, stored - FOOTER_SIZE as u64, &mut footer);
+        let tail_length = Trailer::tail_size(record, &footer)?;
+        if tail_length as u64 > stored {
+            return Err(invalid("storage trailer exceeds physical file length"));
+        }
+        let data_end = stored - tail_length as u64;
+        let mut tail = vec![0; tail_length];
+        file.seek(SeekFrom::Start(data_end))?;
         file.read_exact(&mut tail)?;
-        self.cipher.transform_payload(&iv, length, &mut tail);
+        self.cipher.transform_payload(&iv, data_end, &mut tail);
         let trailer = Trailer::parse(record, &tail)?;
         Ok(Some(StorageFile {
             file,
@@ -117,6 +129,7 @@ impl Catalog {
             iv,
             position: 0,
             length,
+            data_end,
             record: record.clone(),
             trailer,
             chunk: Vec::with_capacity(CHUNK_SIZE),
@@ -131,6 +144,7 @@ pub struct StorageFile {
     iv: [u8; 16],
     position: u64,
     length: u64,
+    data_end: u64,
     record: IndexRecord,
     trailer: Trailer,
     chunk: Vec<u8>,
@@ -144,6 +158,12 @@ impl StorageFile {
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
+    pub fn available_ranges(&self) -> Vec<(u64, u64)> {
+        self.trailer.available_ranges()
+    }
+    pub fn storage_metadata(&self) -> &[u8] {
+        self.trailer.metadata()
+    }
 }
 impl Read for StorageFile {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
@@ -152,6 +172,15 @@ impl Read for StorageFile {
         }
         let chunk_number = (self.position / CHUNK_SIZE as u64) as u32;
         let chunk_start = u64::from(chunk_number) * CHUNK_SIZE as u64;
+        if !self.trailer.chunk_available(chunk_number) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "audio chunk is not cached",
+            ));
+        }
+        if (chunk_start + CHUNK_SIZE as u64).min(self.length) > self.data_end {
+            return Err(invalid("cached chunk exceeds physical data"));
+        }
         if self.chunk_number != Some(chunk_number) {
             self.chunk_number = None;
             self.chunk.resize(

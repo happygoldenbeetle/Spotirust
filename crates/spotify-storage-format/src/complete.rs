@@ -8,6 +8,7 @@ const FOOTER_MAGIC: [u8; 4] = [0xab, 0x33, 0x72, 0x61];
 
 /// A decoded storage tail, including opaque metadata and reserved footer bytes.
 pub struct Trailer {
+    logical_size: u32,
     metadata: Vec<u8>,
     checksums: Vec<u32>,
     reserved: [u8; 24],
@@ -25,12 +26,13 @@ pub fn stored_size(logical: u32, metadata_length: u32) -> io::Result<u32> {
 }
 
 impl Trailer {
-    pub fn parse(record: &IndexRecord, tail: &[u8]) -> io::Result<Self> {
-        if tail.len() < FOOTER_SIZE {
-            return Err(invalid("missing storage footer"));
-        }
-        let footer = &tail[tail.len() - FOOTER_SIZE..];
-        if footer[4..8] != FOOTER_MAGIC || le_u32(footer, 0) != adler32(1, &footer[4..]) {
+    /// Returns the trailer size from a decrypted native footer. Partial files
+    /// place this trailer after their physical data high water mark, not EOF audio.
+    pub fn tail_size(record: &IndexRecord, footer: &[u8]) -> io::Result<usize> {
+        if footer.len() != FOOTER_SIZE
+            || footer[4..8] != FOOTER_MAGIC
+            || le_u32(footer, 0) != adler32(1, &footer[4..])
+        {
             return Err(invalid("storage footer checksum or tag mismatch"));
         }
         if le_u32(footer, 8) != record.logical_size()
@@ -39,13 +41,32 @@ impl Trailer {
         {
             return Err(invalid("storage footer identity mismatch"));
         }
+        let metadata = u32::from(u16::from_le_bytes(footer[34..36].try_into().unwrap()))
+            | (u32::from(footer[44]) << 16);
+        Ok(metadata as usize
+            + (record.logical_size() as usize).div_ceil(CHUNK_SIZE) * 4
+            + FOOTER_SIZE)
+    }
+    pub fn parse(record: &IndexRecord, tail: &[u8]) -> io::Result<Self> {
+        if tail.len() < FOOTER_SIZE {
+            return Err(invalid("missing storage footer"));
+        }
+        let footer = &tail[tail.len() - FOOTER_SIZE..];
+        let expected_tail = Self::tail_size(record, footer)?;
         let metadata_length = u32::from(u16::from_le_bytes(footer[34..36].try_into().unwrap()))
             | (u32::from(footer[44]) << 16);
-        if stored_size(record.logical_size(), metadata_length)? != record.stored_size()
-            || tail.len() as u64 + u64::from(record.logical_size())
-                != u64::from(record.stored_size())
+        if tail.len() != expected_tail
+            || tail.len() as u64 > u64::from(record.stored_size())
+            || (record.flags() & 1 != 0
+                && stored_size(record.logical_size(), metadata_length)? != record.stored_size())
         {
             return Err(invalid("storage trailer length mismatch"));
+        }
+        let data_end = u64::from(record.stored_size()) - tail.len() as u64;
+        if data_end
+            > u64::from(record.logical_size()).div_ceil(CHUNK_SIZE as u64) * CHUNK_SIZE as u64
+        {
+            return Err(invalid("storage data exceeds logical chunk allocation"));
         }
         let metadata = tail[..metadata_length as usize].to_vec();
         let expected = if metadata.is_empty() {
@@ -63,6 +84,7 @@ impl Trailer {
             .map(|bytes| u32::from_be_bytes(*bytes))
             .collect();
         Ok(Self {
+            logical_size: record.logical_size(),
             metadata,
             checksums,
             reserved: footer[40..].try_into().unwrap(),
@@ -73,6 +95,29 @@ impl Trailer {
     }
     pub fn reserved(&self) -> &[u8; 24] {
         &self.reserved
+    }
+    pub fn chunk_available(&self, chunk: u32) -> bool {
+        self.checksums
+            .get(chunk as usize)
+            .is_some_and(|&value| value != u32::MAX)
+    }
+    pub fn available_ranges(&self) -> Vec<(u64, u64)> {
+        let mut ranges: Vec<(u64, u64)> = Vec::new();
+        for (chunk, &checksum) in self.checksums.iter().enumerate() {
+            if checksum == u32::MAX {
+                continue;
+            }
+            let start = chunk as u64 * CHUNK_SIZE as u64;
+            let length = (u64::from(self.logical_size) - start).min(CHUNK_SIZE as u64);
+            if let Some(last) = ranges.last_mut()
+                && last.0 + last.1 == start
+            {
+                last.1 += length;
+            } else {
+                ranges.push((start, length));
+            }
+        }
+        ranges
     }
     pub fn validate_chunk(&self, record: &IndexRecord, chunk: u32, bytes: &[u8]) -> io::Result<()> {
         let start = u64::from(chunk) * CHUNK_SIZE as u64;

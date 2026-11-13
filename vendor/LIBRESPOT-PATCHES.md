@@ -14,3 +14,9 @@ ordinary authenticated session.
 The completed download callback can send encrypted CDN bytes to an explicitly
 enabled application writer. It also exposes whether that writer is active. The
 patches themselves do not own cache paths, delete files, or schedule eviction.
+
+Partial cache ranges seed the ordinary streaming temporary file before network
+fetching. The initial CDN request targets the first missing range. The initial
+requested range bookkeeping uses its actual length, including for nonzero offsets.
+Malformed or truncated imports fall back to ordinary fetching. Download cursor
+position is restored after the application write callback, even on failure.

@@ -1,0 +1,12 @@
+{
+  "provenance": "Synthetic independent cryptography and zlib control; sparse layout established from 23 native partial files",
+  "key": "2b7e151628aed2a6abf7158809cf4f3c",
+  "naming_state": "0707070707070707070707070707070707070707",
+  "record": "f4de0578deadbeef05050505050505050505050505050505050505050000000300000006000101af000000000000c06100000000000000000000000000000000",
+  "encoded_sha1": "bccff13378e631e1d2b4ef096381eaaa6214a15b",
+  "known_chunks": [
+    0,
+    2
+  ],
+  "logical_size": 65967
+}
