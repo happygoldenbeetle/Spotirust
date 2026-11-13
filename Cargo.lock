@@ -3551,8 +3551,6 @@ dependencies = [
 [[package]]
 name = "librespot-audio"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3fe76acb49f58165484303edf0e7bd778f0e6d96f5c59e9d6b6fde1a90d36ff"
 dependencies = [
  "aes",
  "bytes",
@@ -3680,8 +3678,6 @@ dependencies = [
 [[package]]
 name = "librespot-playback"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88258620bf3e6808ea1fadd11639648d77c06280b9f5a4c9d14ea79f6f998af6"
 dependencies = [
  "cpal",
  "form_urlencoded",
@@ -6350,6 +6346,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spotify-storage-format"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "sha1",
+]
+
+[[package]]
 name = "spotirust"
 version = "0.1.0"
 dependencies = [
@@ -6358,6 +6362,7 @@ dependencies = [
  "futures-util",
  "gpui",
  "image",
+ "librespot-audio",
  "librespot-connect",
  "librespot-core",
  "librespot-oauth",
@@ -6373,6 +6378,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "spotify-storage-format",
  "tiny_http",
  "tokio",
  "ttf-parser 0.25.1",

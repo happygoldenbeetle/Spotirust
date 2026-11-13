@@ -1,9 +1,10 @@
 //! Experimental Spotify desktop storage primitives.
 //!
-//! This crate does not locate or modify cache directories, derive client keys,
-//! implement eviction, or provide a working imported audio playback backend.
+//! This crate does not discover cache directories, derive client keys,
+//! or implement eviction. Its snapshot reader opens files read only.
 //! The arithmetic and cipher primitives have been compared with Spotify Windows
-//! 1.3.8.620 using synthetic data. Full file compatibility remains unverified.
+//! 1.3.8.620 using synthetic data. Complete imported streams have also been
+//! decoded with the ordinary authenticated playback library.
 
 use aes::{
     Aes128,
@@ -11,6 +12,8 @@ use aes::{
 };
 use sha1::{Digest, Sha1};
 use std::fmt;
+
+pub mod reader;
 
 pub const INDEX_HEADER_SIZE: usize = 512;
 pub const INDEX_RECORD_SIZE: usize = 64;
@@ -71,6 +74,9 @@ impl IndexRecord {
     }
     pub fn stored_size(&self) -> u32 {
         self.read_u32(44)
+    }
+    pub fn logical_size(&self) -> u32 {
+        self.read_u32(36)
     }
 
     pub fn with_stored_size(&self, size: u32) -> Self {

@@ -12,9 +12,8 @@
 //!   `%LOCALAPPDATA%\Spotify\Browser` folder pasted into Spotirust's `cache` folder;
 //! - `%LOCALAPPDATA%\Spotify\Browser\Cache\Cache_Data`: the client's own cache, in place.
 //!
-//! The audio cache (`%LOCALAPPDATA%\Spotify\Data\*.file`) is not used: the client keeps those
-//! files encrypted with its own local protection (they match neither the CDN's bytes nor its file
-//! ids), and getting around that is off limits.
+//! Audio storage uses a separate encrypted index and file layout. Its explicitly
+//! configured snapshot reader lives in `audio_cache`; this module handles images.
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};

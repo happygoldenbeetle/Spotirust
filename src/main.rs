@@ -13,6 +13,7 @@ mod library;
 mod playlist;
 mod search;
 mod audio_out;
+mod audio_cache;
 mod player;
 mod artist;
 mod login;

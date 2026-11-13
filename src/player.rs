@@ -73,6 +73,7 @@ fn device_id() -> String {
 impl LocalPlayer {
     /// Starts the device on `rt` (blocking until it's registered with Spotify).
     pub fn start(rt: &tokio::runtime::Runtime) -> Result<Self> {
+        crate::audio_cache::initialize();
         let state = Arc::new(Mutex::new(LocalState::default()));
         let st = state.clone();
         let out = Output::start()?;
