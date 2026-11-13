@@ -14,6 +14,8 @@ use sha1::{Digest, Sha1};
 use std::fmt;
 
 pub mod complete;
+pub mod policy;
+mod policy_sort;
 pub mod reader;
 
 pub const INDEX_HEADER_SIZE: usize = 512;

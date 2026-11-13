@@ -1,0 +1,111 @@
+use serde_json::Value;
+use spotify_storage_format::{CapacityValues, policy::*};
+use std::collections::HashMap;
+
+fn controls() -> Value {
+    serde_json::from_str(include_str!("fixtures/native_policy.json")).unwrap()
+}
+fn unsigned(v: &Value, field: &str) -> u64 {
+    v[field].as_u64().unwrap_or_default()
+}
+fn entry(v: &Value) -> Entry {
+    Entry {
+        realm: unsigned(v, "realm") as u8,
+        created: unsigned(v, "created") as u32,
+        used: unsigned(v, "used") as u32,
+        alternate: unsigned(v, "special") as u32,
+        stored_size: unsigned(v, "size") as u32,
+        open_handles: unsigned(v, "open_handles"),
+        protection: unsigned(v, "protection") as u8,
+    }
+}
+
+#[test]
+fn initialized_realm_defaults_match_native_table() {
+    let controls = controls();
+    for native in controls["defaults"].as_array().unwrap() {
+        let config = default_realm(unsigned(native, "realm") as u8).unwrap();
+        assert_eq!(config.priority, unsigned(native, "priority") as u32);
+        assert_eq!(
+            config.fraction.to_bits(),
+            (native["fraction"].as_f64().unwrap() as f32).to_bits()
+        );
+        let times: Vec<_> = native["times"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            [
+                config.used_ttl,
+                config.new_ttl,
+                config.alternate_ttl,
+                config.minimum_after_alternate,
+                config.minimum_age
+            ]
+            .as_slice(),
+            times
+        );
+    }
+    assert!(default_realm(255).is_none());
+}
+
+#[test]
+fn retention_matches_350_native_decisions() {
+    for row in controls()["retention"].as_array().unwrap() {
+        let entry = entry(&row["entry"]);
+        assert_eq!(
+            retention_deadline(
+                &entry,
+                default_realm(entry.realm).as_ref(),
+                row["ignore_open_handles"].as_bool().unwrap()
+            ),
+            row["deadline_ticks"].as_i64(),
+            "{row}"
+        );
+    }
+}
+
+#[test]
+fn eviction_plans_match_254_native_selections_without_deleting_anything() {
+    let configs: HashMap<_, _> = REALMS
+        .iter()
+        .map(|&realm| (realm, default_realm(realm).unwrap()))
+        .collect();
+    for (index, row) in controls()["selection"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let entries: Vec<_> = row["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(entry)
+            .collect();
+        let capacity = CapacityValues {
+            first: row["capacity"][0].as_i64().unwrap(),
+            second: row["capacity"][1].as_i64().unwrap(),
+            small_disk_bound: 0,
+            large_disk_bound: 0,
+        };
+        let plan = plan_eviction(
+            &entries,
+            &configs,
+            capacity,
+            row["now"].as_i64().unwrap() * TICKS_PER_SECOND,
+            row["local_midnight"].as_i64().unwrap() * TICKS_PER_SECOND,
+            unsigned(row, "free"),
+        );
+        let actual: Vec<_> = plan.iter().map(|s| (s.entry, s.reason as u32)).collect();
+        let expected: Vec<_> = row["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| (unsigned(s, "entry") as usize, unsigned(s, "reason") as u32))
+            .collect();
+        assert_eq!(actual, expected, "native selection case {index}");
+    }
+}
