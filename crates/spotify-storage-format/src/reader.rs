@@ -1,4 +1,5 @@
 //! Read-only access to an explicitly selected desktop storage snapshot.
+use crate::complete::{CHUNK_SIZE, FOOTER_SIZE, Trailer};
 use crate::{
     CURRENT_HEADER_MAGIC, INDEX_HEADER_SIZE, INDEX_RECORD_SIZE, IndexRecord, StorageCipher,
     cache_file_name, file_iv,
@@ -72,19 +73,36 @@ impl Catalog {
         if !path.starts_with(&self.root) {
             return Err(invalid("storage entry escapes snapshot root"));
         }
-        let file = File::open(path)?;
+        let mut file = File::open(path)?;
         let length = u64::from(record.logical_size());
         if file.metadata()?.len() != u64::from(record.stored_size())
             || u64::from(record.stored_size()) < length
         {
             return Err(invalid("storage entry length differs from index"));
         }
+        let tail_length = u64::from(record.stored_size()) - length;
+        let maximum_tail = 0xff_ffff
+            + u64::from(record.logical_size()).div_ceil(CHUNK_SIZE as u64) * 4
+            + FOOTER_SIZE as u64;
+        if tail_length > maximum_tail {
+            return Err(invalid("storage trailer exceeds layout bounds"));
+        }
+        let iv = file_iv(file_id, 0, record.version());
+        let mut tail = vec![0; tail_length as usize];
+        file.seek(SeekFrom::Start(length))?;
+        file.read_exact(&mut tail)?;
+        self.cipher.transform_payload(&iv, length, &mut tail);
+        let trailer = Trailer::parse(record, &tail)?;
         Ok(Some(StorageFile {
             file,
             cipher: self.cipher.clone(),
-            iv: file_iv(file_id, 0, record.version()),
+            iv,
             position: 0,
             length,
+            record: record.clone(),
+            trailer,
+            chunk: Vec::with_capacity(CHUNK_SIZE),
+            chunk_number: None,
         }))
     }
 }
@@ -95,6 +113,10 @@ pub struct StorageFile {
     iv: [u8; 16],
     position: u64,
     length: u64,
+    record: IndexRecord,
+    trailer: Trailer,
+    chunk: Vec<u8>,
+    chunk_number: Option<u32>,
 }
 
 impl StorageFile {
@@ -107,10 +129,28 @@ impl StorageFile {
 }
 impl Read for StorageFile {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        let count = (self.length.saturating_sub(self.position)).min(bytes.len() as u64) as usize;
-        let count = self.file.read(&mut bytes[..count])?;
-        self.cipher
-            .transform_payload(&self.iv, self.position, &mut bytes[..count]);
+        if bytes.is_empty() || self.position >= self.length {
+            return Ok(0);
+        }
+        let chunk_number = (self.position / CHUNK_SIZE as u64) as u32;
+        let chunk_start = u64::from(chunk_number) * CHUNK_SIZE as u64;
+        if self.chunk_number != Some(chunk_number) {
+            self.chunk_number = None;
+            self.chunk.resize(
+                (self.length - chunk_start).min(CHUNK_SIZE as u64) as usize,
+                0,
+            );
+            self.file.seek(SeekFrom::Start(chunk_start))?;
+            self.file.read_exact(&mut self.chunk)?;
+            self.cipher
+                .transform_payload(&self.iv, chunk_start, &mut self.chunk);
+            self.trailer
+                .validate_chunk(&self.record, chunk_number, &self.chunk)?;
+            self.chunk_number = Some(chunk_number);
+        }
+        let within = (self.position - chunk_start) as usize;
+        let count = bytes.len().min(self.chunk.len() - within);
+        bytes[..count].copy_from_slice(&self.chunk[within..within + count]);
         self.position += count as u64;
         Ok(count)
     }
@@ -128,7 +168,6 @@ impl Seek for StorageFile {
                 .checked_add_signed(n)
                 .ok_or_else(|| invalid("invalid seek"))?,
         };
-        self.file.seek(SeekFrom::Start(position))?;
         self.position = position;
         Ok(position)
     }
