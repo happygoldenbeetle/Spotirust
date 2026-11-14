@@ -19,6 +19,12 @@ pub struct State {
     pub storage_key_hex: String,
     pub naming_state_hex: String,
     pub configured_override: u64,
+    #[serde(default)]
+    pub capacity_config: Option<spotify_storage_format::CapacityConfig>,
+    #[serde(default)]
+    pub realm_overrides: spotify_storage_format::policy::RealmOverrides,
+    #[serde(default)]
+    pub source_settings_fingerprint: String,
 }
 #[derive(Serialize)]
 struct Profile<'a> {
@@ -27,6 +33,9 @@ struct Profile<'a> {
     naming_state_hex: &'a str,
     configured_override: u64,
     writable: bool,
+    capacity_config: Option<spotify_storage_format::CapacityConfig>,
+    realm_overrides: &'a spotify_storage_format::policy::RealmOverrides,
+    source_settings_fingerprint: &'a str,
 }
 
 fn original_locations() -> Result<Vec<PathBuf>> {
@@ -130,7 +139,7 @@ pub fn initialize_copy(snapshot: &Path, output: &Path, writable: bool) -> Result
     );
     fs::create_dir_all(parent)?;
     #[cfg(windows)]
-    let state = windows::capture(&snapshot, &header, parent)?;
+    let state = capture_copy_state(&snapshot, parent)?;
     #[cfg(not(windows))]
     let state: State = {
         let _ = (snapshot, header, parent, writable);
@@ -145,6 +154,9 @@ pub fn initialize_copy(snapshot: &Path, output: &Path, writable: bool) -> Result
         naming_state_hex: &state.naming_state_hex,
         configured_override: state.configured_override,
         writable,
+        capacity_config: state.capacity_config,
+        realm_overrides: &state.realm_overrides,
+        source_settings_fingerprint: &state.source_settings_fingerprint,
     };
     let bytes = serde_json::to_vec_pretty(&profile)?;
     let staging = output.with_extension(format!("initializing-{}", std::process::id()));
@@ -160,6 +172,173 @@ pub fn initialize_copy(snapshot: &Path, output: &Path, writable: bool) -> Result
     fs::hard_link(&staging, output)?;
     fs::remove_file(staging)?;
     Ok(count)
+}
+
+/// Fingerprints only persisted storage preferences and account property files.
+/// Values are hashed locally, never printed or copied into a public artifact.
+pub fn settings_fingerprint() -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let roaming =
+        PathBuf::from(std::env::var_os("APPDATA").context("APPDATA unavailable")?).join("Spotify");
+    let local =
+        PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA unavailable")?)
+            .join("Spotify");
+    let mut files = vec![
+        ("prefs".to_string(), roaming.join("prefs"), true),
+        (
+            "user_settings".to_string(),
+            local.join("user_settings"),
+            false,
+        ),
+        (
+            "device_settings".to_string(),
+            local.join("device_settings"),
+            false,
+        ),
+    ];
+    for (label, root) in [
+        ("account-prefs", roaming.join("Users")),
+        ("account-properties", local.join("Users")),
+    ] {
+        if !root.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let prefs = label == "account-prefs";
+            files.push((
+                format!("{label}/{name}"),
+                entry
+                    .path()
+                    .join(if prefs { "prefs" } else { "properties.bin" }),
+                prefs,
+            ));
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hash = Sha256::new();
+    if let Ok(metadata) = fs::metadata(roaming.join("Spotify.dll")) {
+        hash.update(metadata.len().to_le_bytes());
+        if let Ok(modified) = metadata.modified() {
+            hash.update(
+                modified
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_nanos()
+                    .to_le_bytes(),
+            );
+        }
+    }
+    for (label, path, prefs) in files {
+        hash.update(label.as_bytes());
+        hash.update([0]);
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if prefs {
+            let text = std::str::from_utf8(&bytes).context("storage preferences are not UTF8")?;
+            let mut values: Vec<_> = text
+                .lines()
+                .filter(|line| line.trim_start().starts_with("storage."))
+                .collect();
+            values.sort_unstable();
+            for value in values {
+                hash.update(value.as_bytes());
+                hash.update([0]);
+            }
+        } else {
+            hash.update(bytes);
+        }
+        hash.update([0xff]);
+    }
+    Ok(encode(&hash.finalize()))
+}
+
+pub fn capture_copy_state(snapshot: &Path, parent: &Path) -> Result<State> {
+    validate_copy_location(snapshot)?;
+    let bytes = fs::read(snapshot.join("Storage/index.dat"))?;
+    capture_control_state(
+        &bytes[..bytes.len().min(INDEX_HEADER_SIZE + 4 * INDEX_RECORD_SIZE)],
+        parent,
+    )
+}
+
+pub fn capture_control_state(index: &[u8], parent: &Path) -> Result<State> {
+    let directory = parent.canonicalize()?;
+    anyhow::ensure!(
+        !original_locations()?
+            .iter()
+            .any(|original| directory.starts_with(original)),
+        "initializer output must be outside original Spotify storage"
+    );
+    anyhow::ensure!(
+        index.len() >= INDEX_HEADER_SIZE + INDEX_RECORD_SIZE
+            && (index.len() - INDEX_HEADER_SIZE).is_multiple_of(INDEX_RECORD_SIZE),
+        "no complete storage records to verify initialization"
+    );
+    anyhow::ensure!(
+        index[..16] == spotify_storage_format::CURRENT_HEADER_MAGIC,
+        "unsupported storage control header"
+    );
+    let before = settings_fingerprint()?;
+    #[cfg(windows)]
+    let mut state = windows::capture(index, parent)?;
+    #[cfg(not(windows))]
+    let mut state: State = {
+        let _ = (index, parent);
+        anyhow::bail!("native initialization requires Windows")
+    };
+    let after = settings_fingerprint()?;
+    anyhow::ensure!(
+        before == after,
+        "source storage settings changed during initialization; retry setup"
+    );
+    state.source_settings_fingerprint = after;
+    Ok(state)
+}
+
+/// Atomically replaces only an owned Spotirust profile after checking its old
+/// bytes. No previous profile or source audio backup is created.
+pub fn replace_profile(path: &Path, expected: &[u8], updated: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("profile directory missing")?
+        .canonicalize()?;
+    anyhow::ensure!(
+        !original_locations()?
+            .iter()
+            .any(|original| parent.starts_with(original)),
+        "profile update cannot target original Spotify storage"
+    );
+    anyhow::ensure!(
+        fs::read(path)? == expected,
+        "storage profile changed concurrently"
+    );
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let staging = path.with_extension(format!("refreshing-{}-{stamp}", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)?;
+    file.write_all(updated)?;
+    file.sync_all()?;
+    drop(file);
+    anyhow::ensure!(
+        fs::read(path)? == expected,
+        "storage profile changed before publication"
+    );
+    #[cfg(windows)]
+    windows::replace_profile(&staging, path)?;
+    #[cfg(not(windows))]
+    fs::rename(staging, path)?;
+    Ok(())
 }
 
 fn validate(snapshot: &Path, key: &[u8; 16], naming: &[u8; 20]) -> Result<usize> {

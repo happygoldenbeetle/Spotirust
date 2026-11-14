@@ -45,11 +45,20 @@ pub struct WorkingStore {
     cipher: Arc<StorageCipher>,
     naming_state: [u8; 20],
     header_hash: [u8; 20],
+    header: [u8; INDEX_HEADER_SIZE],
     records: Vec<IndexRecord>,
     failed: bool,
 }
 
 impl WorkingStore {
+    /// Generates a metadata-only key control without reopening the locked index.
+    pub fn verification_index(&self) -> Vec<u8> {
+        let record = new_audio_record(None, [0; 20], 0, 1, 0, 0)
+            .expect("valid synthetic verification record");
+        let mut bytes = self.header.to_vec();
+        bytes.extend_from_slice(&self.cipher.encode_record(0, &record));
+        bytes
+    }
     pub fn stored_bytes(&self) -> u64 {
         self.records
             .iter()
@@ -133,6 +142,7 @@ impl WorkingStore {
             cipher,
             naming_state,
             header_hash: Sha1::digest(header).into(),
+            header,
             records: Vec::new(),
             failed: false,
         };
@@ -194,6 +204,7 @@ impl WorkingStore {
             cipher: Arc::new(StorageCipher::new(key)),
             naming_state,
             header_hash: Sha1::digest(header).into(),
+            header: *header,
             records: Vec::new(),
             failed: false,
         })

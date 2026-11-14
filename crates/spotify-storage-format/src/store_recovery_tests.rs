@@ -63,6 +63,49 @@ fn publish_intent(writer: &WorkingStore, transaction: &Transaction) -> Vec<u8> {
 }
 
 #[test]
+fn full_range_completion_keeps_partial_filename_and_existing_encrypted_chunks() {
+    let parent = tempfile::tempdir().unwrap();
+    let (original, copy, mut writer, payload) = setup(parent.path());
+    let original_index = fs::read(original.join("Storage/index.dat")).unwrap();
+    let name = cache_file_name(&STATE, &[7; 20], 0, 42);
+    let path = copy.join("Data").join(&name[..2]).join(&name);
+    let prefix = fs::read(&path).unwrap()[..16384].to_vec();
+    assert!(
+        writer
+            .write_partial_audio(
+                PartialWrite {
+                    file_id: [7; 20],
+                    version: 99,
+                    logical_size: payload.len() as u32,
+                    timestamp: 1800000100,
+                    ranges: &[(0, payload.len() as u64)],
+                    metadata: &[],
+                },
+                &mut Cursor::new(&payload),
+            )
+            .unwrap()
+    );
+    assert_eq!(writer.records.len(), 1);
+    assert_eq!(writer.records[0].version(), 42);
+    assert_eq!(writer.records[0].flags(), 7);
+    assert_eq!(&fs::read(&path).unwrap()[..16384], prefix);
+    assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    let mut decoded = Vec::new();
+    writer
+        .catalog()
+        .open_audio(&[7; 20])
+        .unwrap()
+        .unwrap()
+        .read_to_end(&mut decoded)
+        .unwrap();
+    assert_eq!(decoded, payload);
+    assert_eq!(
+        fs::read(original.join("Storage/index.dat")).unwrap(),
+        original_index
+    );
+}
+
+#[test]
 fn forward_recovery_repairs_every_interruption_boundary_without_an_old_file_copy() {
     for boundary in 0..5 {
         let parent = tempfile::tempdir().unwrap();
@@ -384,4 +427,24 @@ fn cleanup_rejects_an_original_alias_before_removing_an_index_entry() {
     assert_eq!(fs::read(copy.join("Storage/index.dat")).unwrap(), index);
     assert_eq!(fs::read(original.join(&relative)).unwrap(), bytes);
     assert!(copy.join(relative).exists());
+}
+
+#[test]
+fn verification_control_does_not_open_or_modify_any_registered_audio() {
+    let parent = tempfile::tempdir().unwrap();
+    let (original, copy, writer, _) = setup(parent.path());
+    let control = writer.verification_index();
+    assert_eq!(control.len(), INDEX_HEADER_SIZE + INDEX_RECORD_SIZE);
+    assert_eq!(
+        StorageCipher::new(&KEY)
+            .decode_record(0, &control[INDEX_HEADER_SIZE..])
+            .unwrap()
+            .logical_size(),
+        1
+    );
+    let before = writer.records[0].clone();
+    drop(writer);
+    let writer = WorkingStore::open_copy(&copy, &original, &KEY, STATE).unwrap();
+    assert_eq!(writer.records[0].as_bytes(), before.as_bytes());
+    assert_eq!(writer.verification_index(), control);
 }

@@ -265,12 +265,21 @@ pub fn configured_limit_bytes(legacy_mebibytes: i32, exact_bytes: &str) -> i64 {
     i64::from(legacy_mebibytes) * 1_048_576
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapacityConfig {
     pub absolute_a: i64,
     pub fraction_a: f32,
     pub fraction_b: f32,
     pub absolute_b: i64,
+}
+impl CapacityConfig {
+    pub fn is_valid(&self) -> bool {
+        self.absolute_a >= 0
+            && self.absolute_b >= 0
+            && (0.0..=1.0).contains(&self.fraction_a)
+            && (0.0..=1.0).contains(&self.fraction_b)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

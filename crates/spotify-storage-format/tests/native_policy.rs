@@ -7,6 +7,45 @@ fn controls() -> Value {
 }
 
 #[test]
+fn realm_overrides_match_64_native_resolver_results() {
+    let controls: Value =
+        serde_json::from_str(include_str!("fixtures/native_realm_overrides.json")).unwrap();
+    for control in controls.as_array().unwrap() {
+        let overrides: RealmOverrides =
+            serde_json::from_value(control["overrides"].clone()).unwrap();
+        let actual = overrides.resolve(unsigned(control, "realm") as u8);
+        let expected = &control["result"];
+        if expected.is_null() {
+            assert!(actual.is_none());
+            continue;
+        }
+        let actual = actual.unwrap();
+        assert_eq!(actual.priority, unsigned(expected, "priority") as u32);
+        assert_eq!(
+            actual.fraction.to_bits(),
+            (expected["fraction"].as_f64().unwrap() as f32).to_bits()
+        );
+        let times: Vec<_> = expected["times"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            [
+                actual.used_ttl,
+                actual.new_ttl,
+                actual.alternate_ttl,
+                actual.minimum_after_alternate,
+                actual.minimum_age
+            ]
+            .as_slice(),
+            times
+        );
+    }
+}
+
+#[test]
 fn capacity_attribute_matches_128_native_property_parses() {
     let controls: Value =
         serde_json::from_str(include_str!("fixtures/native_capacity_attribute.json")).unwrap();

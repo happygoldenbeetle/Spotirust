@@ -1,7 +1,30 @@
 //! Pure cleanup planning reconstructed from Windows client 1.3.8.620.
 //! This module never opens files and never performs deletions.
 use crate::{CapacityConfig, CapacityValues, sse_truncate};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RealmOverrides {
+    pub used_ttl: BTreeMap<u8, i64>,
+    pub new_ttl: BTreeMap<u8, i64>,
+    pub minimum_after_alternate: BTreeMap<u8, i64>,
+}
+impl RealmOverrides {
+    pub fn resolve(&self, realm: u8) -> Option<RealmConfig> {
+        let mut config = default_realm(realm)?;
+        if let Some(&value) = self.used_ttl.get(&realm) {
+            config.used_ttl = value;
+        }
+        if let Some(&value) = self.new_ttl.get(&realm) {
+            config.new_ttl = value;
+        }
+        if let Some(&value) = self.minimum_after_alternate.get(&realm) {
+            config.minimum_after_alternate = value;
+        }
+        Some(config)
+    }
+}
 
 pub const TICKS_PER_SECOND: i64 = 10_000_000;
 pub const REALMS: [u8; 14] = [0, 1, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];

@@ -86,11 +86,7 @@ fn low_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn capture(
-    snapshot: &Path,
-    header: &[u8; INDEX_HEADER_SIZE],
-    parent: &Path,
-) -> Result<State> {
+pub(super) fn capture(index: &[u8], parent: &Path) -> Result<State> {
     let spotify =
         PathBuf::from(std::env::var_os("APPDATA").context("APPDATA unavailable")?).join("Spotify");
     verify_module(&spotify)?;
@@ -109,7 +105,9 @@ pub(super) fn capture(
         fs::create_dir_all(bootstrap.join(path))?;
     }
     let cache = bootstrap.join("cache");
-    fs::write(cache.join("Storage/index.dat"), header)?;
+    fs::write(cache.join("Storage/index.dat"), &index[..INDEX_HEADER_SIZE])?;
+    let control = bootstrap.join("control-index.dat");
+    fs::write(&control, index)?;
     fs::write(
         bootstrap.join("roaming/Spotify/prefs"),
         format!(
@@ -182,7 +180,7 @@ pub(super) fn capture(
             executable.as_os_str(),
             OsStr::new("--cache-init-helper"),
             bootstrap.as_os_str(),
-            snapshot.as_os_str(),
+            control.as_os_str(),
             spotify.as_os_str(),
         ];
         let command = args
@@ -350,7 +348,7 @@ pub(super) fn helper(bootstrap: &Path, snapshot: &Path, spotify: &Path) -> Resul
     }
     let cache = bootstrap.join("cache");
     let (child, pid) = launch_reference(bootstrap, spotify, &cache)?;
-    let index = fs::read(snapshot.join("Storage/index.dat"))?;
+    let index = fs::read(snapshot)?;
     anyhow::ensure!(
         index.len() >= INDEX_HEADER_SIZE + INDEX_RECORD_SIZE,
         "copied index has no entries to verify"
@@ -552,7 +550,7 @@ fn scan(pid: u32, index: &[u8]) -> Result<Option<State>> {
                     .enumerate()
                     .filter(|(_, window)| **window == pattern)
                 {
-                    let state = read(process.0, start + offset + position * 8, 0x350);
+                    let state = read(process.0, start + offset + position * 8, 0x500);
                     let Some(cipher) = word(&state, 0x338) else {
                         continue;
                     };
@@ -577,14 +575,101 @@ fn scan(pid: u32, index: &[u8]) -> Result<Option<State>> {
                     if !candidate(&key, index) {
                         continue;
                     }
+                    let Some((config, overrides)) = policy_snapshot(process.0, base, &state) else {
+                        continue;
+                    };
                     return Ok(Some(State {
                         storage_key_hex: encode(&key),
                         naming_state_hex: encode(&state[0x320..0x334]),
                         configured_override: word(&state, 0xf8).unwrap_or_default() as u64,
+                        capacity_config: Some(config),
+                        realm_overrides: overrides,
+                        source_settings_fingerprint: String::new(),
                     }));
                 }
             }
         }
     }
     Ok(None)
+}
+
+pub(super) fn replace_profile(staging: &Path, path: &Path) -> Result<()> {
+    unsafe {
+        check(
+            ReplaceFileW(
+                wide(path).as_ptr(),
+                wide(staging).as_ptr(),
+                null(),
+                REPLACEFILE_IGNORE_MERGE_ERRORS,
+                null(),
+                null(),
+            ),
+            "publish refreshed storage profile",
+        )
+    }
+}
+
+fn policy_snapshot(
+    process: HANDLE,
+    base: usize,
+    state: &[u8],
+) -> Option<(
+    spotify_storage_format::CapacityConfig,
+    spotify_storage_format::policy::RealmOverrides,
+)> {
+    use spotify_storage_format::{CapacityConfig, policy::RealmOverrides};
+    let config = CapacityConfig {
+        absolute_a: i64::from_le_bytes(state.get(0x20..0x28)?.try_into().ok()?),
+        fraction_a: f32::from_le_bytes(state.get(0x28..0x2c)?.try_into().ok()?),
+        fraction_b: f32::from_le_bytes(state.get(0x2c..0x30)?.try_into().ok()?),
+        absolute_b: i64::from_le_bytes(state.get(0x30..0x38)?.try_into().ok()?),
+    };
+    if !config.is_valid() {
+        return None;
+    }
+    let resolver = word(state, 0x4f8)?;
+    let object = read(process, resolver, 0x38);
+    let table = word(&object, 0)?;
+    if word(&read(process, table + 16, 8), 0)? != base + 0xbc9158 {
+        return None;
+    }
+    let mut result = RealmOverrides::default();
+    for (offset, output) in [
+        (8, &mut result.used_ttl),
+        (24, &mut result.new_ttl),
+        (40, &mut result.minimum_after_alternate),
+    ] {
+        let head = word(&object, offset)?;
+        let count = word(&object, offset + 8)?;
+        if count > 256 {
+            return None;
+        }
+        if count == 0 {
+            continue;
+        }
+        let root = word(&read(process, head + 8, 8), 0)?;
+        let mut pending = vec![root];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(node) = pending.pop() {
+            if node == head || !visited.insert(node) {
+                continue;
+            }
+            if visited.len() > count {
+                return None;
+            }
+            let bytes = read(process, node, 48);
+            if bytes.len() != 48 || bytes[25] != 0 {
+                return None;
+            }
+            output.insert(
+                bytes[32],
+                i64::from_le_bytes(bytes[40..48].try_into().ok()?),
+            );
+            pending.extend([word(&bytes, 0)?, word(&bytes, 16)?]);
+        }
+        if output.len() != count {
+            return None;
+        }
+    }
+    Some((config, result))
 }

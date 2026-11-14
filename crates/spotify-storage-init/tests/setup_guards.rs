@@ -20,3 +20,19 @@ fn a_direct_helper_call_without_a_restricted_token_performs_no_setup_writes() {
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn profile_refresh_is_atomic_without_a_backup_and_rejects_a_stale_writer() {
+    let directory = tempfile::tempdir().unwrap();
+    let profile = directory.path().join("profile.json");
+    std::fs::write(&profile, b"old owned metadata").unwrap();
+    spotify_storage_init::replace_profile(&profile, b"old owned metadata", b"new owned metadata")
+        .unwrap();
+    assert_eq!(std::fs::read(&profile).unwrap(), b"new owned metadata");
+    assert!(
+        spotify_storage_init::replace_profile(&profile, b"old owned metadata", b"stale overwrite")
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&profile).unwrap(), b"new owned metadata");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+}

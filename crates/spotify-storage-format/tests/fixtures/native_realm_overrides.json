@@ -1,0 +1,1250 @@
+[
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        7200,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        1800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        7200,
+        1800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        7200,
+        604800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        1800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        7200,
+        1800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 0,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.0,
+      "times": [
+        6480000,
+        604800,
+        0,
+        129600,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        7200,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1800,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        7200,
+        1800,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        7200,
+        1209600,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "1": 7200
+      },
+      "new_ttl": {
+        "1": 1800
+      },
+      "minimum_after_alternate": {
+        "1": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        7200,
+        1800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 1,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 0,
+      "fraction": 0.07500000298023224,
+      "times": [
+        1209600,
+        1209600,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "7": -15
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        -15,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "0": -15
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "7": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        1800,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "7": -15
+      },
+      "new_ttl": {
+        "7": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        -15,
+        1800,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "0": -15
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "7": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "7": -15
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "7": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        -15,
+        86400,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "0": -15
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "7": 1800
+      },
+      "minimum_after_alternate": {
+        "7": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        1800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "7": -15
+      },
+      "new_ttl": {
+        "7": 1800
+      },
+      "minimum_after_alternate": {
+        "7": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        -15,
+        1800,
+        0,
+        400,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 7,
+    "overrides": {
+      "used_ttl": {
+        "0": -15
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": {
+      "priority": 1,
+      "fraction": 0.10000000149011612,
+      "times": [
+        2592000,
+        86400,
+        0,
+        0,
+        3600
+      ]
+    }
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "255": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "255": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "255": 7200
+      },
+      "new_ttl": {
+        "255": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {}
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "255": 400
+      }
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "255": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "255": 400
+      }
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {},
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "255": 1800
+      },
+      "minimum_after_alternate": {
+        "255": 400
+      }
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {},
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "255": 7200
+      },
+      "new_ttl": {
+        "255": 1800
+      },
+      "minimum_after_alternate": {
+        "255": 400
+      }
+    },
+    "result": null
+  },
+  {
+    "realm": 255,
+    "overrides": {
+      "used_ttl": {
+        "0": 7200
+      },
+      "new_ttl": {
+        "0": 1800
+      },
+      "minimum_after_alternate": {
+        "0": 400
+      }
+    },
+    "result": null
+  }
+]

@@ -23,7 +23,7 @@ static IMPORTED: OnceLock<Arc<ImportedCache>> = OnceLock::new();
 static POLICY_RUNNING: AtomicBool = AtomicBool::new(false);
 type OpenAudio = Arc<Mutex<HashMap<[u8; 20], u64>>>;
 
-#[derive(Deserialize)]
+#[derive(serde::Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Profile {
     snapshot_root: PathBuf,
@@ -34,6 +34,12 @@ struct Profile {
     /// Captured active native setting. Zero selects automatic capacity.
     #[serde(default)]
     configured_override: u64,
+    #[serde(default)]
+    capacity_config: Option<spotify_storage_format::CapacityConfig>,
+    #[serde(default)]
+    realm_overrides: policy::RealmOverrides,
+    #[serde(default)]
+    source_settings_fingerprint: String,
 }
 
 struct ImportedCache {
@@ -42,11 +48,21 @@ struct ImportedCache {
     rejected: Mutex<HashSet<FileId>>,
     open_audio: OpenAudio,
     opened: AtomicBool,
+    policy: Mutex<CapturedPolicy>,
+    profile_path: PathBuf,
+    snapshot_root: PathBuf,
+    write_allowed: Arc<AtomicBool>,
+}
+#[derive(Clone)]
+struct CapturedPolicy {
     configured_override: u64,
+    capacity: spotify_storage_format::CapacityConfig,
+    realm_overrides: policy::RealmOverrides,
+    fingerprint: String,
 }
 struct Reader {
     file: StorageFile,
-    access: Option<(FileId, Arc<Mutex<WorkingStore>>)>,
+    access: Option<(FileId, Arc<Mutex<WorkingStore>>, Arc<AtomicBool>)>,
     read: bool,
     lease: Option<([u8; 20], OpenAudio)>,
 }
@@ -59,7 +75,10 @@ impl Reader {
         });
         Self {
             file,
-            access: cache.writer.as_ref().map(|writer| (id, writer.clone())),
+            access: cache
+                .writer
+                .as_ref()
+                .map(|writer| (id, writer.clone(), cache.write_allowed.clone())),
             read: false,
             lease,
         }
@@ -68,7 +87,8 @@ impl Reader {
 impl Drop for Reader {
     fn drop(&mut self) {
         if self.read
-            && let Some((id, writer)) = &self.access
+            && let Some((id, writer, allowed)) = &self.access
+            && allowed.load(Ordering::Acquire)
         {
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -146,7 +166,7 @@ impl CacheBackend for ImportedCache {
             })
     }
     fn writable(&self) -> bool {
-        self.writer.is_some()
+        self.writer.is_some() && self.write_allowed.load(Ordering::Acquire)
     }
     fn store_partial(
         &self,
@@ -154,6 +174,9 @@ impl CacheBackend for ImportedCache {
         source: &mut dyn CacheSource,
         ranges: &[(u64, u64)],
     ) -> io::Result<()> {
+        if !self.writable() {
+            return Ok(());
+        }
         let Some(writer) = &self.writer else {
             return Ok(());
         };
@@ -182,6 +205,9 @@ impl CacheBackend for ImportedCache {
         Ok(())
     }
     fn store(&self, file: FileId, source: &mut dyn CacheSource) -> io::Result<()> {
+        if !self.writable() {
+            return Ok(());
+        }
         let Some(writer) = &self.writer else {
             return Ok(());
         };
@@ -196,7 +222,17 @@ impl CacheBackend for ImportedCache {
         )
         .map_err(io::Error::other)?;
         let mut writer = writer.lock().unwrap();
-        writer.write_audio(file.0, rand::random(), length, timestamp, source, &[])?;
+        writer.write_partial_audio(
+            PartialWrite {
+                file_id: file.0,
+                version: rand::random(),
+                logical_size: length,
+                timestamp,
+                ranges: &[(0, u64::from(length))],
+                metadata: &[],
+            },
+            source,
+        )?;
         *self.catalog.write().unwrap() = writer.catalog();
         self.rejected.lock().unwrap().remove(&file);
         eprintln!("Stored completed audio in desktop cache: {length} bytes");
@@ -255,11 +291,48 @@ fn install() -> Result<usize> {
         let count = spotify_storage_init::initialize_copy(&root, &path, true)?;
         eprintln!("Copied audio cache initialized: {count} entries");
     }
-    let profile: Profile =
-        serde_json::from_reader(std::fs::File::open(path)?).context("invalid storage profile")?;
+    let original_profile = std::fs::read(&path)?;
+    let mut profile: Profile =
+        serde_json::from_slice(&original_profile).context("invalid storage profile")?;
+    if profile.writable {
+        let synchronize = (|| -> Result<()> {
+            let stamp = spotify_storage_init::settings_fingerprint()?;
+            if stamp != profile.source_settings_fingerprint {
+                eprintln!("Synchronizing native storage settings for working cache");
+                let state = spotify_storage_init::capture_copy_state(
+                    &profile.snapshot_root,
+                    path.parent().context("profile directory missing")?,
+                )?;
+                profile.storage_key_hex = state.storage_key_hex;
+                profile.naming_state_hex = state.naming_state_hex;
+                profile.configured_override = state.configured_override;
+                profile.capacity_config = state.capacity_config;
+                profile.realm_overrides = state.realm_overrides;
+                profile.source_settings_fingerprint = state.source_settings_fingerprint;
+                spotify_storage_init::replace_profile(
+                    &path,
+                    &original_profile,
+                    &serde_json::to_vec_pretty(&profile)?,
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = synchronize {
+            eprintln!(
+                "Storage settings refresh unavailable; retaining read-only import: {error:#}"
+            );
+            profile.writable = false;
+        }
+    }
     anyhow::ensure!(
         profile.configured_override <= i64::MAX as u64,
         "unsupported native storage limit"
+    );
+    anyhow::ensure!(
+        profile
+            .capacity_config
+            .is_none_or(|config| config.is_valid()),
+        "invalid captured native capacity configuration"
     );
     let key = decode_hex(&profile.storage_key_hex)?;
     let naming_state = decode_hex(&profile.naming_state_hex)?;
@@ -290,13 +363,22 @@ fn install() -> Result<usize> {
         None => Catalog::open(&profile.snapshot_root, &key, naming_state)?,
     };
     let count = catalog.audio_count();
+    let write_allowed = Arc::new(AtomicBool::new(writer.is_some()));
     let backend = Arc::new(ImportedCache {
         catalog: RwLock::new(catalog),
         writer,
         rejected: Mutex::new(HashSet::new()),
         open_audio: Arc::new(Mutex::new(HashMap::new())),
         opened: AtomicBool::new(false),
-        configured_override: profile.configured_override,
+        policy: Mutex::new(CapturedPolicy {
+            configured_override: profile.configured_override,
+            capacity: profile.capacity_config.unwrap_or(policy::CAPACITY_DEFAULTS),
+            realm_overrides: profile.realm_overrides,
+            fingerprint: profile.source_settings_fingerprint,
+        }),
+        profile_path: path,
+        snapshot_root: profile.snapshot_root,
+        write_allowed,
     });
     anyhow::ensure!(
         set_cache_backend(backend.clone()),
@@ -314,9 +396,56 @@ struct DiskContext {
 }
 
 impl ImportedCache {
+    fn refresh_policy(&self) -> Result<CapturedPolicy> {
+        spotify_storage_init::validate_copy_location(&self.snapshot_root)?;
+        let original = std::fs::read(&self.profile_path)?;
+        let mut profile: Profile = serde_json::from_slice(&original)?;
+        anyhow::ensure!(
+            profile.writable
+                && profile.snapshot_root.canonicalize()? == self.snapshot_root.canonicalize()?,
+            "working profile changed; restart cache integration"
+        );
+        let control = self
+            .writer
+            .as_ref()
+            .context("cache is read only")?
+            .lock()
+            .unwrap()
+            .verification_index();
+        let state = spotify_storage_init::capture_control_state(
+            &control,
+            self.profile_path
+                .parent()
+                .context("profile directory missing")?,
+        )?;
+        anyhow::ensure!(
+            state.configured_override <= i64::MAX as u64,
+            "unsupported captured byte limit"
+        );
+        profile.storage_key_hex = state.storage_key_hex;
+        profile.naming_state_hex = state.naming_state_hex;
+        profile.configured_override = state.configured_override;
+        profile.capacity_config = state.capacity_config;
+        profile.realm_overrides = state.realm_overrides;
+        profile.source_settings_fingerprint = state.source_settings_fingerprint;
+        spotify_storage_init::replace_profile(
+            &self.profile_path,
+            &original,
+            &serde_json::to_vec_pretty(&profile)?,
+        )?;
+        let policy = CapturedPolicy {
+            configured_override: profile.configured_override,
+            capacity: profile.capacity_config.unwrap_or(policy::CAPACITY_DEFAULTS),
+            realm_overrides: profile.realm_overrides,
+            fingerprint: profile.source_settings_fingerprint,
+        };
+        *self.policy.lock().unwrap() = policy.clone();
+        Ok(policy)
+    }
     fn policy_pass(
         &self,
         config: spotify_storage_format::CapacityConfig,
+        native: &CapturedPolicy,
         orphans: bool,
     ) -> Result<(u64, DiskContext)> {
         let mut writer = self
@@ -328,8 +457,8 @@ impl ImportedCache {
         let (free, total) = writer.disk_space()?;
         let free_plus_cache = free.saturating_add(writer.stored_bytes());
         let mut capacity = capacity_values(config, Some(total));
-        if self.configured_override != 0 {
-            capacity.first = self.configured_override as i64;
+        if native.configured_override != 0 {
+            capacity.first = native.configured_override as i64;
         }
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
         let now_ticks = i64::try_from(now.as_secs())?
@@ -345,7 +474,7 @@ impl ImportedCache {
             * policy::TICKS_PER_SECOND;
         let configs = policy::REALMS
             .into_iter()
-            .map(|realm| (realm, policy::default_realm(realm).unwrap()))
+            .map(|realm| (realm, native.realm_overrides.resolve(realm).unwrap()))
             .collect();
         // Opens register their lease under a catalog read lock. Holding its
         // write lock here makes the open-count snapshot and removals consistent.
@@ -401,13 +530,59 @@ pub fn start_policy_worker(session: Session) {
         return;
     }
     tokio::spawn(async move {
-        let mut config = policy::CAPACITY_DEFAULTS;
+        let mut native = cache.policy.lock().unwrap().clone();
+        let mut config = native.capacity;
         let mut due = Instant::now();
+        let mut settings_due = Instant::now();
+        let mut verified = cache.write_allowed.load(Ordering::Acquire);
         let mut disk: Option<DiskContext> = None;
         let mut first = true;
         loop {
             if session.is_invalid() {
                 break;
+            }
+            if Instant::now() >= settings_due {
+                let observed =
+                    tokio::task::spawn_blocking(spotify_storage_init::settings_fingerprint).await;
+                match observed {
+                    Ok(Ok(stamp)) if stamp == native.fingerprint => {
+                        if !verified {
+                            due = Instant::now();
+                        }
+                        verified = true;
+                        cache.write_allowed.store(true, Ordering::Release);
+                    }
+                    Ok(Ok(_)) => {
+                        verified = false;
+                        cache.write_allowed.store(false, Ordering::Release);
+                        let refresh = cache.clone();
+                        match tokio::task::spawn_blocking(move || refresh.refresh_policy()).await {
+                            Ok(Ok(updated)) => {
+                                config = updated.capacity;
+                                native = updated;
+                                verified = true;
+                                cache.write_allowed.store(true, Ordering::Release);
+                                due = Instant::now();
+                                eprintln!("Working cache storage settings synchronized");
+                            }
+                            _ => log::warn!(
+                                "Working cache writes deferred while native storage settings are unavailable"
+                            ),
+                        }
+                    }
+                    _ => {
+                        verified = false;
+                        cache.write_allowed.store(false, Ordering::Release);
+                        log::warn!(
+                            "Working cache writes deferred while source settings cannot be read"
+                        );
+                    }
+                }
+                settings_due = Instant::now() + Duration::from_secs(30);
+            }
+            if !verified {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
             }
             if let Some(updated) = policy::capacity_attribute(
                 session.get_user_attribute("storage-size-config").as_deref(),
@@ -438,8 +613,11 @@ pub fn start_policy_worker(session: Session) {
             }
             if Instant::now() >= due {
                 let pass_cache = cache.clone();
-                match tokio::task::spawn_blocking(move || pass_cache.policy_pass(config, first))
-                    .await
+                let native = native.clone();
+                match tokio::task::spawn_blocking(move || {
+                    pass_cache.policy_pass(config, &native, first)
+                })
+                .await
                 {
                     Ok(Ok((delay, context))) => {
                         due = Instant::now() + Duration::from_millis(delay);

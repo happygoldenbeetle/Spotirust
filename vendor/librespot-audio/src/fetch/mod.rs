@@ -316,6 +316,8 @@ pub struct AudioFileStreaming {
     position: u64,
     stream_loader_command_tx: mpsc::UnboundedSender<StreamLoaderCommand>,
     shared: Arc<AudioFileShared>,
+    // Keep the source cache entry protected until this stream closes.
+    _partial_cache_reader: Option<Box<dyn crate::cache_backend::PartialReader>>,
 }
 
 struct AudioFileDownloadStatus {
@@ -457,7 +459,12 @@ impl AudioFile {
     }
 }
 
-fn seed_partial(file_id: FileId, output: &mut fs::File) -> io::Result<Option<(usize, RangeSet)>> {
+type SeededPartial = (
+    (usize, RangeSet),
+    Box<dyn crate::cache_backend::PartialReader>,
+);
+
+fn seed_partial(file_id: FileId, output: &mut fs::File) -> io::Result<Option<SeededPartial>> {
     let Some(mut reader) = crate::cache_backend::open_partial_cached_file(file_id)? else {
         return Ok(None);
     };
@@ -468,7 +475,7 @@ fn seed_partial(file_id: FileId, output: &mut fs::File) -> io::Result<Option<(us
             ranges.len()
         );
     }
-    Ok(seeded)
+    Ok(seeded.map(|ranges| (ranges, reader)))
 }
 
 fn seed_reader(
@@ -615,6 +622,10 @@ impl AudioFileStreaming {
             }
         };
 
+        let (seeded, partial_cache_reader) = match seeded {
+            Some((ranges, reader)) => (Some(ranges), Some(reader)),
+            None => (None, None),
+        };
         let minimum_download_size = AudioFetchParams::get().minimum_download_size;
         let initial_range = first_missing_range(seeded.as_ref(), minimum_download_size);
         if seeded.is_some() {
@@ -739,6 +750,7 @@ impl AudioFileStreaming {
             position: 0,
             stream_loader_command_tx,
             shared,
+            _partial_cache_reader: partial_cache_reader,
         })
     }
 }

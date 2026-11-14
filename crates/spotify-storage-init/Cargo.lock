@@ -315,6 +315,7 @@ name = "spotify-storage-format"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "serde",
  "sha1",
  "windows-sys",
 ]
