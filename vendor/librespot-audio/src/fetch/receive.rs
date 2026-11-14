@@ -12,7 +12,7 @@ use hyper::StatusCode;
 use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, oneshot};
 
-use librespot_core::{Error, http_client::HttpClient, session::Session};
+use librespot_core::{Error, FileId, http_client::HttpClient, session::Session};
 
 use crate::range_set::{Range, RangeSet};
 
@@ -149,6 +149,7 @@ async fn receive_data(
 
 struct AudioFileFetch {
     session: Session,
+    file_id: FileId,
     shared: Arc<AudioFileShared>,
     output: Option<NamedTempFile>,
 
@@ -377,10 +378,38 @@ impl AudioFileFetch {
                     self.finish()?;
                     return Ok(ControlFlow::Break);
                 }
+                self.persist_partial();
             }
         }
 
         Ok(ControlFlow::Continue)
+    }
+
+    fn persist_partial(&mut self) {
+        if !crate::cache_backend::cache_writes_enabled() {
+            return;
+        }
+        let ranges: Vec<_> = {
+            let status = self
+                .shared
+                .download_status
+                .lock()
+                .expect(DOWNLOAD_STATUS_POISON_MSG);
+            status
+                .downloaded
+                .iter()
+                .map(|range| (range.start as u64, range.length as u64))
+                .collect()
+        };
+        if let Some(output) = self.output.as_mut() {
+            if let Err(error) = crate::cache_backend::store_partial_file(
+                self.file_id,
+                output.as_file_mut(),
+                &ranges,
+            ) {
+                warn!("Unable to persist partial desktop cache: {error}");
+            }
+        }
     }
 
     fn handle_stream_loader_command(
@@ -417,6 +446,7 @@ impl AudioFileFetch {
 
 pub(super) async fn audio_file_fetch(
     session: Session,
+    file_id: FileId,
     shared: Arc<AudioFileShared>,
     initial_request: StreamingRequest,
     output: NamedTempFile,
@@ -445,6 +475,7 @@ pub(super) async fn audio_file_fetch(
 
     let mut fetch = AudioFileFetch {
         session: session.clone(),
+        file_id,
         shared,
         output: Some(output),
 

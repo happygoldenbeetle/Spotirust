@@ -458,10 +458,7 @@ impl AudioFile {
 }
 
 fn seed_partial(file_id: FileId, output: &mut fs::File) -> io::Result<Option<(usize, RangeSet)>> {
-    let Some(backend) = crate::cache_backend::backend() else {
-        return Ok(None);
-    };
-    let Some(mut reader) = backend.partial(file_id)? else {
+    let Some(mut reader) = crate::cache_backend::open_partial_cached_file(file_id)? else {
         return Ok(None);
     };
     let seeded = seed_reader(&mut *reader, output)?;
@@ -729,6 +726,7 @@ impl AudioFileStreaming {
 
         session.spawn(audio_file_fetch(
             session.clone(),
+            file_id,
             shared.clone(),
             initial_request,
             write_file,

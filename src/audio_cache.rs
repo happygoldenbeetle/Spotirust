@@ -7,7 +7,7 @@ use librespot_core::FileId;
 use librespot_playback::config::Bitrate;
 use serde::Deserialize;
 use spotify_storage_format::reader::{Catalog, StorageFile};
-use spotify_storage_format::store::WorkingStore;
+use spotify_storage_format::store::{PartialWrite, WorkingStore};
 use std::{
     collections::HashSet,
     io::{self, Read, Seek, SeekFrom},
@@ -80,6 +80,39 @@ impl CacheBackend for ImportedCache {
     }
     fn writable(&self) -> bool {
         self.writer.is_some()
+    }
+    fn store_partial(
+        &self,
+        file: FileId,
+        source: &mut dyn CacheSource,
+        ranges: &[(u64, u64)],
+    ) -> io::Result<()> {
+        let Some(writer) = &self.writer else {
+            return Ok(());
+        };
+        let length = u32::try_from(source.seek(SeekFrom::End(0))?).map_err(io::Error::other)?;
+        let timestamp = u32::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(io::Error::other)?
+                .as_secs(),
+        )
+        .map_err(io::Error::other)?;
+        let mut writer = writer.lock().unwrap();
+        let mut catalog = self.catalog.write().unwrap();
+        let request = PartialWrite {
+            file_id: file.0,
+            version: rand::random(),
+            logical_size: length,
+            timestamp,
+            ranges,
+            metadata: &[],
+        };
+        if writer.write_partial_audio(request, source)? {
+            *catalog = writer.catalog();
+            log::debug!("Persisted native partial audio progress");
+        }
+        Ok(())
     }
     fn store(&self, file: FileId, source: &mut dyn CacheSource) -> io::Result<()> {
         let Some(writer) = &self.writer else {

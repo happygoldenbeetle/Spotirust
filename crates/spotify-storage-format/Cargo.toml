@@ -8,6 +8,9 @@ publish = false
 aes = "0.8.4"
 sha1 = "0.10.6"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 serde_json = "1"
 tempfile = "3"

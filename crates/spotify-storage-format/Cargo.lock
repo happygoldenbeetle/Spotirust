@@ -247,6 +247,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "tempfile",
+ "windows-sys",
 ]
 
 [[package]]

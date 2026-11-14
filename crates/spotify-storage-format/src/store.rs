@@ -10,8 +10,18 @@ use std::{
     sync::Arc,
 };
 
+pub struct PartialWrite<'a> {
+    pub file_id: [u8; 20],
+    pub version: u16,
+    pub logical_size: u32,
+    pub timestamp: u32,
+    pub ranges: &'a [(u64, u64)],
+    pub metadata: &'a [u8],
+}
+
 pub struct WorkingStore {
     root: PathBuf,
+    original_root: Option<PathBuf>,
     index: File,
     cipher: Arc<StorageCipher>,
     naming_state: [u8; 20],
@@ -86,6 +96,7 @@ impl WorkingStore {
         drop(original);
         Ok(Self {
             root,
+            original_root: Some(original_root),
             index,
             cipher,
             naming_state,
@@ -121,6 +132,7 @@ impl WorkingStore {
         index.sync_all()?;
         Ok(Self {
             root,
+            original_root: None,
             index,
             cipher: Arc::new(StorageCipher::new(key)),
             naming_state,
@@ -228,6 +240,126 @@ impl WorkingStore {
         Ok(())
     }
 
+    /// Persists whole downloaded chunks into a sparse native file. Existing
+    /// partial versions stay stable, so each progress update writes only new data.
+    pub fn write_partial_audio(
+        &mut self,
+        request: PartialWrite<'_>,
+        source: &mut (impl Read + Seek + ?Sized),
+    ) -> io::Result<bool> {
+        let PartialWrite {
+            file_id,
+            version,
+            logical_size,
+            timestamp,
+            ranges,
+            metadata,
+        } = request;
+        if self.failed {
+            return Err(invalid("storage writer stopped after an I/O failure"));
+        }
+        if logical_size == 0 || logical_size > i32::MAX as u32 {
+            return Err(invalid("unsupported audio length"));
+        }
+        if !crate::partial::chunk_map(logical_size, ranges)?
+            .iter()
+            .any(|&value| value)
+        {
+            return Ok(false);
+        }
+        let slot = self
+            .records
+            .iter()
+            .position(|r| r.realm() == 0 && r.file_id() == &file_id);
+        let record = if let Some(slot) = slot {
+            let record = self.records[slot].clone();
+            if record.flags() == 7 {
+                return Ok(false);
+            }
+            if record.flags() != 6 || record.logical_size() != logical_size {
+                return Err(invalid("partial stream identity changed"));
+            }
+            record
+        } else {
+            new_audio_record(None, file_id, version, logical_size, 0, timestamp)?.with_flags(6)
+        };
+        let name = cache_file_name(&self.naming_state, &file_id, 0, record.version());
+        let data = self.root.join("Data").canonicalize()?;
+        if !data.starts_with(&self.root) {
+            return Err(invalid("data directory escapes working copy"));
+        }
+        let directory = data.join(&name[..2]);
+        match fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        let directory = directory.canonicalize()?;
+        if !directory.starts_with(&self.root) {
+            return Err(invalid("data shard escapes working copy"));
+        }
+        let path = directory.join(&name);
+        if slot.is_some() && !path.canonicalize()?.starts_with(&self.root) {
+            return Err(invalid("partial file escapes working copy"));
+        }
+        // Query original identity without requesting data or write access.
+        let original_guard = if slot.is_some() {
+            if let Some(original) = &self.original_root {
+                match original_metadata_handle(&original.join("Data").join(&name[..2]).join(&name))
+                {
+                    Ok(file) => Some(file),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e),
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(slot.is_none());
+        let mut output = options.open(path)?;
+        if let Some(original) = &original_guard
+            && same_file(original, &output)?
+        {
+            return Err(invalid("partial file aliases original"));
+        }
+        let updated = crate::partial::update_file(
+            source,
+            &mut output,
+            &record,
+            &self.cipher,
+            ranges,
+            metadata,
+        );
+        drop(original_guard);
+        let result = (|| {
+            let Some(updated) = updated? else {
+                return Ok(false);
+            };
+            let position = slot.unwrap_or(self.records.len());
+            let position_u32 =
+                u32::try_from(position).map_err(|_| invalid("storage index too large"))?;
+            self.index.seek(SeekFrom::Start(
+                INDEX_HEADER_SIZE as u64 + u64::from(position_u32) * INDEX_RECORD_SIZE as u64,
+            ))?;
+            self.index
+                .write_all(&self.cipher.encode_record(position_u32, &updated))?;
+            self.index.sync_all()?;
+            if let Some(slot) = slot {
+                self.records[slot] = updated;
+            } else {
+                self.records.push(updated);
+            }
+            Ok(true)
+        })();
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
     pub fn catalog(&self) -> Catalog {
         Catalog::from_records(
             self.root.clone(),
@@ -264,4 +396,44 @@ fn new_audio_record(
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+fn original_metadata_handle(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.access_mode(0);
+    }
+    #[cfg(not(windows))]
+    options.read(true);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn same_file(a: &File, b: &File) -> io::Result<bool> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let identity = |file: &File| -> io::Result<(u32, u32, u32)> {
+        let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let info = unsafe { info.assume_init() };
+        Ok((
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+        ))
+    };
+    Ok(identity(a)? == identity(b)?)
+}
+#[cfg(unix)]
+fn same_file(a: &File, b: &File) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let a = a.metadata()?;
+    let b = b.metadata()?;
+    Ok(a.dev() == b.dev() && a.ino() == b.ino())
 }

@@ -14,6 +14,7 @@ use sha1::{Digest, Sha1};
 use std::fmt;
 
 pub mod complete;
+pub mod partial;
 pub mod policy;
 mod policy_sort;
 pub mod reader;

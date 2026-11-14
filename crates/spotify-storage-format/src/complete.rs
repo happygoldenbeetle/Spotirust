@@ -101,6 +101,9 @@ impl Trailer {
             .get(chunk as usize)
             .is_some_and(|&value| value != u32::MAX)
     }
+    pub(crate) fn checksums(&self) -> &[u32] {
+        &self.checksums
+    }
     pub fn available_ranges(&self) -> Vec<(u64, u64)> {
         let mut ranges: Vec<(u64, u64)> = Vec::new();
         for (chunk, &checksum) in self.checksums.iter().enumerate() {
@@ -184,6 +187,26 @@ pub fn write_complete(
         destination.write_all(&block[..count])?;
         offset += count as u64;
     }
+    let mut tail = encode_tail(record, metadata, &checksums, reserved)?;
+    if encrypted {
+        cipher.transform_payload(&iv, offset, &mut tail);
+    }
+    destination.write_all(&tail)
+}
+
+pub(crate) fn encode_tail(
+    record: &IndexRecord,
+    metadata: &[u8],
+    checksums: &[u8],
+    reserved: &[u8; 24],
+) -> io::Result<Vec<u8>> {
+    let metadata_length =
+        u32::try_from(metadata.len()).map_err(|_| invalid("storage metadata too large"))?;
+    if metadata_length > 0xff_ffff
+        || checksums.len() != (record.logical_size() as usize).div_ceil(CHUNK_SIZE) * 4
+    {
+        return Err(invalid("invalid storage trailer dimensions"));
+    }
     let mut footer = [0; FOOTER_SIZE];
     footer[4..8].copy_from_slice(&FOOTER_MAGIC);
     footer[8..12].copy_from_slice(&record.logical_size().to_le_bytes());
@@ -200,15 +223,11 @@ pub fn write_complete(
     footer[44] = (metadata_length >> 16) as u8;
     let checksum = adler32(1, &footer[4..]);
     footer[..4].copy_from_slice(&checksum.to_le_bytes());
-    // Encrypt continuously at physical offsets, including an unaligned logical end.
     let mut tail = Vec::with_capacity(metadata.len() + checksums.len() + FOOTER_SIZE);
     tail.extend_from_slice(metadata);
-    tail.extend_from_slice(&checksums);
+    tail.extend_from_slice(checksums);
     tail.extend_from_slice(&footer);
-    if encrypted {
-        cipher.transform_payload(&iv, offset, &mut tail);
-    }
-    destination.write_all(&tail)
+    Ok(tail)
 }
 
 fn le_u32(bytes: &[u8], offset: usize) -> u32 {

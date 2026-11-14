@@ -208,3 +208,109 @@ fn completes_partial_entry_in_a_new_file_while_preserving_imported_bytes() {
         INDEX_HEADER_SIZE + INDEX_RECORD_SIZE
     );
 }
+
+#[test]
+fn partial_progress_persists_across_updates_without_rewriting_known_chunks() {
+    use spotify_storage_format::{complete::CHUNK_SIZE, store::PartialWrite};
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("owned");
+    let mut header = [0; INDEX_HEADER_SIZE];
+    header[..16].copy_from_slice(&CURRENT_HEADER_MAGIC);
+    let mut writer = WorkingStore::create_new(&root, &header, &[3; 16], [4; 20]).unwrap();
+    let payload = vec![0x59; 2 * CHUNK_SIZE + 3];
+    let mut source = std::io::Cursor::new(&payload);
+    let request = |version, ranges| PartialWrite {
+        file_id: [7; 20],
+        version,
+        logical_size: payload.len() as u32,
+        timestamp: 1800000000,
+        ranges,
+        metadata: &[],
+    };
+    assert!(
+        writer
+            .write_partial_audio(request(42, &[(0, CHUNK_SIZE as u64)]), &mut source)
+            .unwrap()
+    );
+    let name = cache_file_name(&[4; 20], &[7; 20], 0, 42);
+    let path = root.join("Data").join(&name[..2]).join(name);
+    let original = fs::read(&path).unwrap();
+    assert_eq!(writer.catalog().partial_audio_count(), 1);
+    let mut existing_reader = writer
+        .catalog()
+        .open_partial_audio(&[7; 20])
+        .unwrap()
+        .unwrap();
+    assert!(
+        writer
+            .write_partial_audio(
+                request(111, &[(CHUNK_SIZE as u64, CHUNK_SIZE as u64 + 3)]),
+                &mut source
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        &fs::read(&path).unwrap()[..CHUNK_SIZE],
+        &original[..CHUNK_SIZE]
+    );
+    let mut known_chunk = vec![0; CHUNK_SIZE];
+    existing_reader.read_exact(&mut known_chunk).unwrap();
+    assert_eq!(known_chunk, payload[..CHUNK_SIZE]);
+    let catalog = writer.catalog();
+    assert_eq!(catalog.audio_count(), 1);
+    assert_eq!(catalog.partial_audio_count(), 0);
+    let mut file = catalog.open_audio(&[7; 20]).unwrap().unwrap();
+    let mut actual = Vec::new();
+    file.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, payload);
+    drop(writer);
+    assert_eq!(
+        Catalog::open(&root, &[3; 16], [4; 20])
+            .unwrap()
+            .audio_count(),
+        1
+    );
+}
+
+#[test]
+fn hard_linked_partial_audio_is_rejected_before_original_bytes_change() {
+    use spotify_storage_format::store::PartialWrite;
+    let parent = tempfile::tempdir().unwrap();
+    let original = parent.path().join("original");
+    let copy = parent.path().join("copy");
+    let key = [3; 16];
+    let state = [4; 20];
+    let mut header = [0; INDEX_HEADER_SIZE];
+    header[..16].copy_from_slice(&CURRENT_HEADER_MAGIC);
+    let payload = vec![0x59; 32768];
+    let request = |ranges| PartialWrite {
+        file_id: [7; 20],
+        version: 42,
+        logical_size: payload.len() as u32,
+        timestamp: 1800000000,
+        ranges,
+        metadata: &[],
+    };
+    let mut source = WorkingStore::create_new(&original, &header, &key, state).unwrap();
+    source
+        .write_partial_audio(request(&[(0, 16384)]), &mut std::io::Cursor::new(&payload))
+        .unwrap();
+    drop(source);
+    let name = cache_file_name(&state, &[7; 20], 0, 42);
+    let relative = std::path::PathBuf::from("Data").join(&name[..2]).join(name);
+    fs::create_dir_all(copy.join(relative.parent().unwrap())).unwrap();
+    fs::create_dir(copy.join("Storage")).unwrap();
+    let index = fs::read(original.join("Storage/index.dat")).unwrap();
+    let bytes = fs::read(original.join(&relative)).unwrap();
+    fs::write(copy.join("Storage/index.dat"), &index).unwrap();
+    fs::hard_link(original.join(&relative), copy.join(&relative)).unwrap();
+    let mut writer = WorkingStore::open_copy(&copy, &original, &key, state).unwrap();
+    let error = writer
+        .write_partial_audio(request(&[(0, 32768)]), &mut std::io::Cursor::new(&payload))
+        .unwrap_err();
+    assert!(error.to_string().contains("aliases original"));
+    assert_eq!(fs::read(original.join(&relative)).unwrap(), bytes);
+    assert_eq!(fs::read(original.join("Storage/index.dat")).unwrap(), index);
+    drop(writer);
+    assert_eq!(fs::read(copy.join("Storage/index.dat")).unwrap(), index);
+}
