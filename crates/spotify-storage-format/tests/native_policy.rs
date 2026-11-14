@@ -5,6 +5,53 @@ use std::collections::HashMap;
 fn controls() -> Value {
     serde_json::from_str(include_str!("fixtures/native_policy.json")).unwrap()
 }
+
+#[test]
+fn closed_access_matches_64_native_timestamp_and_counter_updates() {
+    use spotify_storage_format::{INDEX_RECORD_SIZE, IndexRecord, adler32};
+    let controls: Value =
+        serde_json::from_str(include_str!("fixtures/native_access.json")).unwrap();
+    for control in controls.as_array().unwrap() {
+        let mut raw = [0xa5; INDEX_RECORD_SIZE];
+        raw[4..8].copy_from_slice(&0xdeadbeef_u32.to_be_bytes());
+        raw[40..44].copy_from_slice(&1234_u32.to_be_bytes());
+        raw[52..56].copy_from_slice(&5678_u32.to_be_bytes());
+        raw[48] = unsigned(control, "before_count") as u8;
+        let checksum = adler32(1, &raw[4..]);
+        raw[..4].copy_from_slice(&checksum.to_be_bytes());
+        let updated = IndexRecord::parse(&raw).unwrap().with_closed_access(
+            unsigned(control, "seconds") as u32,
+            control["read"].as_bool().unwrap(),
+            control["write"].as_bool().unwrap(),
+        );
+        assert_eq!(updated.created(), unsigned(control, "created") as u32);
+        assert_eq!(updated.last_used(), unsigned(control, "used") as u32);
+        assert_eq!(updated.access_count(), unsigned(control, "count") as u8);
+        for (offset, byte) in raw.iter().enumerate().skip(4) {
+            if !(40..44).contains(&offset) && !(52..56).contains(&offset) && offset != 48 {
+                assert_eq!(updated.as_bytes()[offset], *byte);
+            }
+        }
+        assert!(IndexRecord::parse(updated.as_bytes()).is_ok());
+    }
+}
+
+#[test]
+fn cleanup_timing_matches_128_native_scheduled_tasks() {
+    let controls: Value =
+        serde_json::from_str(include_str!("fixtures/native_scheduling.json")).unwrap();
+    for control in controls.as_array().unwrap() {
+        assert_eq!(
+            cleanup_delay_ms(
+                control["removed"].as_bool().unwrap(),
+                unsigned(control, "free"),
+                unsigned(control, "reserve")
+            ),
+            unsigned(control, "delay_ms"),
+            "{control}"
+        );
+    }
+}
 fn unsigned(v: &Value, field: &str) -> u64 {
     v[field].as_u64().unwrap_or_default()
 }

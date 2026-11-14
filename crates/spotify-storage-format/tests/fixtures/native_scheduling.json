@@ -1,0 +1,898 @@
+[
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 0,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 1,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 100,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 524288000,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 536870911,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 536870912,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 536870913,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": false,
+    "free": 1073741824,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 1800000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 0,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 1,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 100,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 524288000,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 536870911,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 536870912,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 536870913,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 300000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 0,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 0,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 100,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 100,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 524288000,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 524288000,
+    "stored": 1234567,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 1073741824,
+    "stored": 0,
+    "delay_ms": 600000
+  },
+  {
+    "removed": true,
+    "free": 1073741824,
+    "reserve": 1073741824,
+    "stored": 1234567,
+    "delay_ms": 600000
+  }
+]

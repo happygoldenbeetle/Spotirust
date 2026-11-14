@@ -1,8 +1,11 @@
 //! Experimental publication into a new store or a distinct imported copy.
 use crate::{
     CURRENT_HEADER_MAGIC, INDEX_HEADER_SIZE, INDEX_RECORD_SIZE, IndexRecord, StorageCipher,
-    adler32, cache_file_name, complete, reader::Catalog,
+    adler32, cache_file_name, complete,
+    journal::{self, Transaction},
+    reader::Catalog,
 };
+use sha1::{Digest, Sha1};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
@@ -25,6 +28,7 @@ pub struct WorkingStore {
     index: File,
     cipher: Arc<StorageCipher>,
     naming_state: [u8; 20],
+    header_hash: [u8; 20],
     records: Vec<IndexRecord>,
     failed: bool,
 }
@@ -75,34 +79,42 @@ impl WorkingStore {
         if header != source_header || header[..16] != CURRENT_HEADER_MAGIC {
             return Err(invalid("working cache header differs from source"));
         }
-        let length = index.metadata()?.len();
-        if length < INDEX_HEADER_SIZE as u64
-            || !(length - INDEX_HEADER_SIZE as u64).is_multiple_of(INDEX_RECORD_SIZE as u64)
-        {
-            return Err(invalid("invalid working index length"));
-        }
         let cipher = Arc::new(StorageCipher::new(key));
-        let mut records = Vec::new();
-        for slot in 0..(length - INDEX_HEADER_SIZE as u64) / INDEX_RECORD_SIZE as u64 {
-            let slot = u32::try_from(slot).map_err(|_| invalid("storage index too large"))?;
-            let mut raw = [0; INDEX_RECORD_SIZE];
-            index.read_exact(&mut raw)?;
-            records.push(
-                cipher
-                    .decode_record(slot, &raw)
-                    .map_err(|_| invalid("working index record validation failed"))?,
-            );
-        }
         drop(original);
-        Ok(Self {
+        let mut store = Self {
             root,
             original_root: Some(original_root),
             index,
             cipher,
             naming_state,
-            records,
+            header_hash: Sha1::digest(header).into(),
+            records: Vec::new(),
             failed: false,
-        })
+        };
+        store.recover()?;
+        let length = store.index.metadata()?.len();
+        if length < INDEX_HEADER_SIZE as u64
+            || !(length - INDEX_HEADER_SIZE as u64).is_multiple_of(INDEX_RECORD_SIZE as u64)
+        {
+            return Err(invalid("invalid working index length"));
+        }
+        let mut records = Vec::new();
+        store
+            .index
+            .seek(SeekFrom::Start(INDEX_HEADER_SIZE as u64))?;
+        for slot in 0..(length - INDEX_HEADER_SIZE as u64) / INDEX_RECORD_SIZE as u64 {
+            let slot = u32::try_from(slot).map_err(|_| invalid("storage index too large"))?;
+            let mut raw = [0; INDEX_RECORD_SIZE];
+            store.index.read_exact(&mut raw)?;
+            records.push(
+                store
+                    .cipher
+                    .decode_record(slot, &raw)
+                    .map_err(|_| invalid("working index record validation failed"))?,
+            );
+        }
+        store.records = records;
+        Ok(store)
     }
     /// Creates the directory itself with create_dir, never create_dir_all. The
     /// destination must not exist. Header/key initialization remains the caller's
@@ -136,6 +148,7 @@ impl WorkingStore {
             index,
             cipher: Arc::new(StorageCipher::new(key)),
             naming_state,
+            header_hash: Sha1::digest(header).into(),
             records: Vec::new(),
             failed: false,
         })
@@ -221,12 +234,14 @@ impl WorkingStore {
         let result = (|| {
             complete::write_complete(source, &mut file, &record, &self.cipher, metadata, &[0; 24])?;
             file.sync_all()?;
-            self.index.seek(SeekFrom::Start(
-                INDEX_HEADER_SIZE as u64 + u64::from(slot) * INDEX_RECORD_SIZE as u64,
-            ))?;
-            self.index
-                .write_all(&self.cipher.encode_record(slot, &record))?;
-            self.index.sync_all()
+            self.commit(Transaction {
+                header_hash: self.header_hash,
+                index_length: INDEX_HEADER_SIZE as u64
+                    + (self.records.len() + usize::from(previous_slot.is_none())) as u64
+                        * INDEX_RECORD_SIZE as u64,
+                records: vec![(slot, record.clone())],
+                data: None,
+            })
         })();
         if let Err(error) = result {
             self.failed = true;
@@ -283,7 +298,51 @@ impl WorkingStore {
         } else {
             new_audio_record(None, file_id, version, logical_size, 0, timestamp)?.with_flags(6)
         };
-        let name = cache_file_name(&self.naming_state, &file_id, 0, record.version());
+        let mut output = self.open_data(&record, slot.is_none(), false)?;
+        let updated = crate::partial::plan_update(
+            source,
+            &mut output,
+            &record,
+            &self.cipher,
+            ranges,
+            metadata,
+        );
+        drop(output);
+        let result = (|| {
+            let Some(updated) = updated? else {
+                return Ok(false);
+            };
+            let position = slot.unwrap_or(self.records.len());
+            let position_u32 =
+                u32::try_from(position).map_err(|_| invalid("storage index too large"))?;
+            self.commit(Transaction {
+                header_hash: self.header_hash,
+                index_length: INDEX_HEADER_SIZE as u64
+                    + (self.records.len() + usize::from(slot.is_none())) as u64
+                        * INDEX_RECORD_SIZE as u64,
+                records: vec![(position_u32, updated.record.clone())],
+                data: Some((updated.record.clone(), updated.patches)),
+            })?;
+            if let Some(slot) = slot {
+                self.records[slot] = updated.record;
+            } else {
+                self.records.push(updated.record);
+            }
+            Ok(true)
+        })();
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn open_data(&self, record: &IndexRecord, new: bool, recovering: bool) -> io::Result<File> {
+        let name = cache_file_name(
+            &self.naming_state,
+            record.file_id(),
+            record.realm(),
+            record.version(),
+        );
         let data = self.root.join("Data").canonicalize()?;
         if !data.starts_with(&self.root) {
             return Err(invalid("data directory escapes working copy"));
@@ -299,65 +358,104 @@ impl WorkingStore {
             return Err(invalid("data shard escapes working copy"));
         }
         let path = directory.join(&name);
-        if slot.is_some() && !path.canonicalize()?.starts_with(&self.root) {
+        if path.exists() && !path.canonicalize()?.starts_with(&self.root) {
             return Err(invalid("partial file escapes working copy"));
         }
         // Query original identity without requesting data or write access.
-        let original_guard = if slot.is_some() {
-            if let Some(original) = &self.original_root {
-                match original_metadata_handle(&original.join("Data").join(&name[..2]).join(&name))
-                {
-                    Ok(file) => Some(file),
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-                    Err(e) => return Err(e),
-                }
-            } else {
-                None
+        let original_guard = if let Some(original) = &self.original_root {
+            match original_metadata_handle(&original.join("Data").join(&name[..2]).join(&name)) {
+                Ok(file) => Some(file),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e),
             }
         } else {
             None
         };
         let mut options = OpenOptions::new();
-        options.read(true).write(true).create_new(slot.is_none());
-        let mut output = options.open(path)?;
+        options
+            .read(true)
+            .write(true)
+            .create_new(new)
+            .create(recovering);
+        let output = options.open(path)?;
         if let Some(original) = &original_guard
             && same_file(original, &output)?
         {
             return Err(invalid("partial file aliases original"));
         }
-        let updated = crate::partial::update_file(
-            source,
-            &mut output,
-            &record,
-            &self.cipher,
-            ranges,
-            metadata,
-        );
-        drop(original_guard);
-        let result = (|| {
-            let Some(updated) = updated? else {
-                return Ok(false);
-            };
-            let position = slot.unwrap_or(self.records.len());
-            let position_u32 =
-                u32::try_from(position).map_err(|_| invalid("storage index too large"))?;
+        Ok(output)
+    }
+
+    fn journal_paths(&self) -> io::Result<(PathBuf, PathBuf)> {
+        let directory = self.root.join("Storage").canonicalize()?;
+        if !directory.starts_with(&self.root) {
+            return Err(invalid("transaction directory escapes working cache"));
+        }
+        Ok((
+            directory.join(journal::STAGING),
+            directory.join(journal::READY),
+        ))
+    }
+
+    fn commit(&mut self, transaction: Transaction) -> io::Result<()> {
+        let bytes = transaction.encode(&self.cipher)?;
+        let (staging, ready) = self.journal_paths()?;
+        if ready.try_exists()? {
+            return Err(invalid("pending transaction requires recovery"));
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&staging, &ready)?;
+        self.apply_transaction(&transaction)?;
+        fs::remove_file(ready)
+    }
+
+    fn apply_transaction(&mut self, transaction: &Transaction) -> io::Result<()> {
+        if let Some((record, patches)) = &transaction.data {
+            let mut output = self.open_data(record, false, true)?;
+            for patch in patches {
+                output.seek(SeekFrom::Start(patch.offset))?;
+                output.write_all(&patch.bytes)?;
+            }
+            output.set_len(u64::from(record.stored_size()))?;
+            output.sync_all()?;
+        }
+        for (slot, record) in &transaction.records {
             self.index.seek(SeekFrom::Start(
-                INDEX_HEADER_SIZE as u64 + u64::from(position_u32) * INDEX_RECORD_SIZE as u64,
+                INDEX_HEADER_SIZE as u64 + u64::from(*slot) * INDEX_RECORD_SIZE as u64,
             ))?;
             self.index
-                .write_all(&self.cipher.encode_record(position_u32, &updated))?;
-            self.index.sync_all()?;
-            if let Some(slot) = slot {
-                self.records[slot] = updated;
-            } else {
-                self.records.push(updated);
-            }
-            Ok(true)
-        })();
-        if result.is_err() {
-            self.failed = true;
+                .write_all(&self.cipher.encode_record(*slot, record))?;
         }
-        result
+        self.index.set_len(transaction.index_length)?;
+        self.index.sync_all()
+    }
+
+    fn recover(&mut self) -> io::Result<()> {
+        let (staging, ready) = self.journal_paths()?;
+        if ready.try_exists()? {
+            let mut file = File::open(&ready)?;
+            if file.metadata()?.len() > journal::MAX_SIZE as u64 {
+                return Err(invalid("pending transaction too large"));
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            let transaction = Transaction::decode(&bytes, &self.cipher, &self.header_hash)?;
+            self.apply_transaction(&transaction)?;
+            drop(file);
+            fs::remove_file(ready)?;
+        }
+        // This file was never committed, so no native file or index mutation
+        // could have started. Removing its directory entry does not follow links.
+        if staging.try_exists()? {
+            fs::remove_file(staging)?;
+        }
+        Ok(())
     }
 
     pub fn catalog(&self) -> Catalog {
@@ -367,6 +465,37 @@ impl WorkingStore {
             self.naming_state,
             &self.records,
         )
+    }
+
+    /// Persists a read close using the native last-used/count behavior. Only
+    /// the distinct working index changes; audio bytes remain untouched.
+    pub fn record_read(&mut self, file_id: &[u8; 20], timestamp: u32) -> io::Result<bool> {
+        if self.failed {
+            return Err(invalid("storage writer stopped after an I/O failure"));
+        }
+        let Some(slot) = self
+            .records
+            .iter()
+            .position(|r| r.realm() == 0 && r.file_id() == file_id)
+        else {
+            return Ok(false);
+        };
+        let updated = self.records[slot].with_closed_access(timestamp, true, false);
+        if updated == self.records[slot] {
+            return Ok(false);
+        }
+        let result = self.commit(Transaction {
+            header_hash: self.header_hash,
+            index_length: self.index.metadata()?.len(),
+            records: vec![(slot as u32, updated.clone())],
+            data: None,
+        });
+        if let Err(error) = result {
+            self.failed = true;
+            return Err(error);
+        }
+        self.records[slot] = updated;
+        Ok(true)
     }
 }
 
@@ -430,6 +559,10 @@ fn same_file(a: &File, b: &File) -> io::Result<bool> {
     };
     Ok(identity(a)? == identity(b)?)
 }
+
+#[cfg(test)]
+#[path = "store_recovery_tests.rs"]
+mod recovery_tests;
 #[cfg(unix)]
 fn same_file(a: &File, b: &File) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;

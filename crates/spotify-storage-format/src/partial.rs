@@ -64,6 +64,37 @@ pub fn update_file(
     ranges: &[(u64, u64)],
     metadata: &[u8],
 ) -> io::Result<Option<IndexRecord>> {
+    let Some(update) = plan_update(source, destination, record, cipher, ranges, metadata)? else {
+        return Ok(None);
+    };
+    for patch in &update.patches {
+        destination.seek(SeekFrom::Start(patch.offset))?;
+        destination.write_all(&patch.bytes)?;
+    }
+    destination.set_len(u64::from(update.record.stored_size()))?;
+    destination.sync_all()?;
+    Ok(Some(update.record))
+}
+
+pub(crate) struct Patch {
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+pub(crate) struct PartialUpdate {
+    pub record: IndexRecord,
+    pub patches: Vec<Patch>,
+}
+
+/// Builds forward writes without modifying the destination. The working store
+/// can make this intent durable before it applies either data or index changes.
+pub(crate) fn plan_update(
+    source: &mut (impl Read + Seek + ?Sized),
+    destination: &mut File,
+    record: &IndexRecord,
+    cipher: &StorageCipher,
+    ranges: &[(u64, u64)],
+    metadata: &[u8],
+) -> io::Result<Option<PartialUpdate>> {
     if record.realm() != 0 || record.flags() != 6 {
         return Err(invalid(
             "incremental writer requires a partial stream entry",
@@ -114,6 +145,7 @@ pub fn update_file(
         .collect();
     encode_tail(record, metadata, &checksum_bytes, &reserved)?;
     let mut block = [0; CHUNK_SIZE];
+    let mut patches = Vec::new();
     let mut changed = false;
     for (chunk, &ready) in available.iter().enumerate() {
         if !ready || checksums[chunk] != u32::MAX {
@@ -125,8 +157,10 @@ pub fn update_file(
         source.read_exact(&mut block[..count])?;
         checksums[chunk] = chunk_checksum(record.file_id(), 0, chunk as u32, &block[..count]);
         cipher.transform_payload(&iv, offset, &mut block[..count]);
-        destination.seek(SeekFrom::Start(offset))?;
-        destination.write_all(&block[..count])?;
+        patches.push(Patch {
+            offset,
+            bytes: block[..count].to_vec(),
+        });
         data_end = data_end.max(offset + count as u64);
         changed = true;
     }
@@ -143,15 +177,16 @@ pub fn update_file(
     let stored = u32::try_from(data_end + tail.len() as u64)
         .map_err(|_| invalid("partial file too large"))?;
     cipher.transform_payload(&iv, data_end, &mut tail);
-    destination.seek(SeekFrom::Start(data_end))?;
-    destination.write_all(&tail)?;
-    destination.set_len(u64::from(stored))?;
-    destination.sync_all()?;
-    Ok(Some(
-        record
+    patches.push(Patch {
+        offset: data_end,
+        bytes: tail,
+    });
+    Ok(Some(PartialUpdate {
+        record: record
             .with_stored_size(stored)
             .with_flags(if complete { 7 } else { 6 }),
-    ))
+        patches,
+    }))
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)

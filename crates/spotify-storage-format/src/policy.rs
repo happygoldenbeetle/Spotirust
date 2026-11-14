@@ -6,6 +6,18 @@ use std::collections::HashMap;
 pub const TICKS_PER_SECOND: i64 = 10_000_000;
 pub const REALMS: [u8; 14] = [0, 1, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
+/// Native rescheduling after a cleanup pass. The free-space value already
+/// excludes current cache bytes. Low space takes precedence over an idle pass.
+pub fn cleanup_delay_ms(removed_any: bool, free_bytes: u64, reserve_bytes: u64) -> u64 {
+    if free_bytes < reserve_bytes {
+        300_000
+    } else if !removed_any && free_bytes > 512 * 1024 * 1024 {
+        1_800_000
+    } else {
+        600_000
+    }
+}
+
 /// Observed initialized defaults for the reference version, before overrides.
 pub const CAPACITY_DEFAULTS: CapacityConfig = CapacityConfig {
     absolute_a: 10 * 1024 * 1024 * 1024,

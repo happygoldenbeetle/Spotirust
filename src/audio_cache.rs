@@ -30,28 +30,60 @@ struct Profile {
 
 struct ImportedCache {
     catalog: RwLock<Catalog>,
-    writer: Option<Mutex<WorkingStore>>,
+    writer: Option<Arc<Mutex<WorkingStore>>>,
     rejected: Mutex<HashSet<FileId>>,
 }
-struct Reader(StorageFile);
+struct Reader {
+    file: StorageFile,
+    access: Option<(FileId, Arc<Mutex<WorkingStore>>)>,
+    read: bool,
+}
+impl Reader {
+    fn new(file: StorageFile, id: FileId, writer: &Option<Arc<Mutex<WorkingStore>>>) -> Self {
+        Self {
+            file,
+            access: writer.as_ref().map(|writer| (id, writer.clone())),
+            read: false,
+        }
+    }
+}
+impl Drop for Reader {
+    fn drop(&mut self) {
+        if self.read
+            && let Some((id, writer)) = &self.access
+        {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|time| u32::try_from(time.as_secs()).ok());
+            if let (Some(timestamp), Ok(mut writer)) = (timestamp, writer.lock()) {
+                if let Err(error) = writer.record_read(&id.0, timestamp) {
+                    log::warn!("Unable to persist desktop cache access: {error}");
+                }
+            }
+        }
+    }
+}
 impl Read for Reader {
     fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
-        self.0.read(b)
+        let count = self.file.read(b)?;
+        self.read |= count > 0;
+        Ok(count)
     }
 }
 impl Seek for Reader {
     fn seek(&mut self, p: SeekFrom) -> io::Result<u64> {
-        self.0.seek(p)
+        self.file.seek(p)
     }
 }
 impl CachedReader for Reader {
     fn byte_len(&self) -> u64 {
-        self.0.len()
+        self.file.len()
     }
 }
 impl PartialReader for Reader {
     fn available_ranges(&self) -> Vec<(u64, u64)> {
-        self.0.available_ranges()
+        self.file.available_ranges()
     }
 }
 impl CacheBackend for ImportedCache {
@@ -63,7 +95,11 @@ impl CacheBackend for ImportedCache {
             .read()
             .unwrap()
             .open_audio(&file.0)
-            .map(|file| file.map(|file| Box::new(Reader(file)) as Box<dyn CachedReader>))
+            .map(|reader| {
+                reader.map(|reader| {
+                    Box::new(Reader::new(reader, file, &self.writer)) as Box<dyn CachedReader>
+                })
+            })
     }
     fn reject(&self, file: FileId) {
         self.rejected.lock().unwrap().insert(file);
@@ -76,7 +112,11 @@ impl CacheBackend for ImportedCache {
             .read()
             .unwrap()
             .open_partial_audio(&file.0)
-            .map(|file| file.map(|file| Box::new(Reader(file)) as Box<dyn PartialReader>))
+            .map(|reader| {
+                reader.map(|reader| {
+                    Box::new(Reader::new(reader, file, &self.writer)) as Box<dyn PartialReader>
+                })
+            })
     }
     fn writable(&self) -> bool {
         self.writer.is_some()
@@ -168,15 +208,13 @@ fn install() -> Result<usize> {
         serde_json::from_reader(std::fs::File::open(path)?).context("invalid storage profile")?;
     let key = decode_hex(&profile.storage_key_hex)?;
     let naming_state = decode_hex(&profile.naming_state_hex)?;
-    let catalog = Catalog::open(&profile.snapshot_root, &key, naming_state)?;
-    let count = catalog.audio_count();
     let writer = if profile.writable {
         let original = PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA")?)
             .join("Spotify");
         match WorkingStore::open_copy(&profile.snapshot_root, &original, &key, naming_state) {
             Ok(writer) => {
                 eprintln!("Desktop audio cache writes enabled in separate working copy");
-                Some(Mutex::new(writer))
+                Some(Arc::new(Mutex::new(writer)))
             }
             Err(error) => {
                 eprintln!("Desktop cache writes unavailable; retaining read-only import: {error}");
@@ -186,6 +224,13 @@ fn install() -> Result<usize> {
     } else {
         None
     };
+    // A pending forward transaction can repair a torn index record, so a
+    // writable copy must recover before the snapshot parser sees that index.
+    let catalog = match &writer {
+        Some(writer) => writer.lock().unwrap().catalog(),
+        None => Catalog::open(&profile.snapshot_root, &key, naming_state)?,
+    };
+    let count = catalog.audio_count();
     anyhow::ensure!(
         set_cache_backend(Arc::new(ImportedCache {
             catalog: RwLock::new(catalog),

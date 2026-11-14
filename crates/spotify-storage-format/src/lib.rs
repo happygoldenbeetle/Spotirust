@@ -14,6 +14,7 @@ use sha1::{Digest, Sha1};
 use std::fmt;
 
 pub mod complete;
+mod journal;
 pub mod partial;
 pub mod policy;
 mod policy_sort;
@@ -82,6 +83,40 @@ impl IndexRecord {
     }
     pub fn logical_size(&self) -> u32 {
         self.read_u32(36)
+    }
+    pub fn created(&self) -> u32 {
+        self.read_u32(40)
+    }
+    pub fn last_used(&self) -> u32 {
+        self.read_u32(52)
+    }
+    pub fn alternate(&self) -> u32 {
+        self.read_u32(56)
+    }
+    pub fn access_count(&self) -> u8 {
+        self.0[48]
+    }
+    pub fn protection(&self) -> u8 {
+        self.0[49]
+    }
+
+    /// Matches the native close operation's timestamp and saturating byte count.
+    /// A zero clock value leaves both fields unchanged. Unknown bytes are retained.
+    pub fn with_closed_access(&self, timestamp: u32, read: bool, reset_created: bool) -> Self {
+        if timestamp == 0 || (!read && !reset_created) {
+            return self.clone();
+        }
+        let mut updated = self.clone();
+        if read {
+            updated.0[52..56].copy_from_slice(&timestamp.to_be_bytes());
+            updated.0[48] = updated.0[48].saturating_add(1);
+        }
+        if reset_created {
+            updated.0[40..44].copy_from_slice(&timestamp.to_be_bytes());
+        }
+        let checksum = adler32(1, &updated.0[4..]);
+        updated.0[..4].copy_from_slice(&checksum.to_be_bytes());
+        updated
     }
 
     pub fn with_stored_size(&self, size: u32) -> Self {
