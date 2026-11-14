@@ -6355,6 +6355,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spotify-storage-init"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "spotify-storage-format",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "spotirust"
 version = "0.1.0"
 dependencies = [
@@ -6381,6 +6393,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "spotify-storage-format",
+ "spotify-storage-init",
  "tiny_http",
  "tokio",
  "ttf-parser 0.25.1",

@@ -14,6 +14,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 librespot-core = "0.8"
 librespot-audio = "0.8"
 spotify-storage-format = { path = "crates/spotify-storage-format" }
+spotify-storage-init = { path = "crates/spotify-storage-init" }
 librespot-oauth = "0.8"
 librespot-protocol = "0.8"
 protobuf = "3.7"

@@ -225,12 +225,36 @@ fn install() -> Result<usize> {
                 return Ok(0);
             };
             let path = PathBuf::from(base).join("Spotirust/storage-profile.json");
-            if !path.exists() {
-                return Ok(0);
-            }
             path
         }
     };
+    if !path.exists() {
+        let mut candidates = Vec::new();
+        if let Some(root) = std::env::var_os("SPOTIRUST_CACHE_ROOT") {
+            candidates.push(PathBuf::from(root));
+        }
+        if let Some(base) = std::env::var_os("APPDATA") {
+            let base = PathBuf::from(base).join("Spotirust");
+            candidates.extend([base.join("Cache"), base]);
+        }
+        if let Ok(executable) = std::env::current_exe() {
+            if let Some(parent) = executable.parent() {
+                candidates.extend([parent.join("Cache"), parent.to_path_buf()]);
+            }
+        }
+        let root = candidates
+            .into_iter()
+            .find(|root| root.join("Storage/index.dat").is_file() && root.join("Data").is_dir());
+        let Some(root) = root else {
+            if std::env::var_os("SPOTIRUST_STORAGE_PROFILE").is_some() {
+                anyhow::bail!("selected storage profile does not exist");
+            }
+            return Ok(0);
+        };
+        eprintln!("Preparing copied Spotify audio cache");
+        let count = spotify_storage_init::initialize_copy(&root, &path, true)?;
+        eprintln!("Copied audio cache initialized: {count} entries");
+    }
     let profile: Profile =
         serde_json::from_reader(std::fs::File::open(path)?).context("invalid storage profile")?;
     anyhow::ensure!(
@@ -242,7 +266,11 @@ fn install() -> Result<usize> {
     let writer = if profile.writable {
         let original = PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA")?)
             .join("Spotify");
-        match WorkingStore::open_copy(&profile.snapshot_root, &original, &key, naming_state) {
+        match spotify_storage_init::validate_copy_location(&profile.snapshot_root)
+            .map_err(|error| io::Error::other(error.to_string()))
+            .and_then(|_| {
+                WorkingStore::open_copy(&profile.snapshot_root, &original, &key, naming_state)
+            }) {
             Ok(writer) => {
                 eprintln!("Desktop audio cache writes enabled in separate working copy");
                 Some(Arc::new(Mutex::new(writer)))

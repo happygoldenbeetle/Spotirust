@@ -128,6 +128,7 @@ impl log::Log for StderrLog {
 }
 
 fn main() {
+    if let Some(status)=spotify_storage_init::cli() {std::process::exit(status);}
     static LOGGER: StderrLog = StderrLog;
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Warn));
     Application::new().with_assets(Assets).run(|cx: &mut App| {
