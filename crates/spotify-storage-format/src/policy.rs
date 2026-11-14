@@ -26,6 +26,65 @@ pub const CAPACITY_DEFAULTS: CapacityConfig = CapacityConfig {
     absolute_b: 500 * 1024 * 1024,
 };
 
+/// Parses the server's storage-size-config property with the reference client's
+/// Windows strtol semantics: four comma-separated MiB/percent integer fields.
+/// An invalid or missing attribute leaves the initialized configuration intact.
+pub fn capacity_attribute(value: Option<&str>) -> Option<CapacityConfig> {
+    let mut fields = value?.split(',');
+    let absolute_a = native_integer(fields.next()?)?;
+    let fraction_a = native_integer(fields.next()?)? as f32 * 0.01_f32;
+    let absolute_b = native_integer(fields.next()?)?;
+    let fraction_b = native_integer(fields.next()?)? as f32 * 0.01_f32;
+    if fields.next().is_some()
+        || absolute_a < 0
+        || absolute_b < 0
+        || !(0.0..=1.0).contains(&fraction_a)
+        || !(0.0..=1.0).contains(&fraction_b)
+    {
+        return None;
+    }
+    Some(CapacityConfig {
+        absolute_a: i64::from(absolute_a) << 20,
+        fraction_a,
+        fraction_b,
+        absolute_b: i64::from(absolute_b) << 20,
+    })
+}
+
+fn native_integer(value: &str) -> Option<i32> {
+    let value = value.split('\0').next()?;
+    if value.is_empty() {
+        return Some(0);
+    }
+    let bytes = value.as_bytes();
+    let mut offset = 0;
+    while offset < bytes.len()
+        && matches!(bytes[offset], b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)
+    {
+        offset += 1;
+    }
+    let negative = bytes.get(offset) == Some(&b'-');
+    if matches!(bytes.get(offset), Some(b'+' | b'-')) {
+        offset += 1;
+    }
+    let first = offset;
+    let mut result = 0_u64;
+    while let Some(byte @ b'0'..=b'9') = bytes.get(offset) {
+        result = result
+            .saturating_mul(10)
+            .saturating_add(u64::from(byte - b'0'));
+        offset += 1;
+    }
+    if offset == first || offset != bytes.len() {
+        return None;
+    }
+    Some(if negative {
+        -(result.min(1_u64 << 31) as i64) as i32
+    } else {
+        result.min(i32::MAX as u64) as i32
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RealmConfig {
     pub priority: u32,

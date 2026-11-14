@@ -226,3 +226,162 @@ fn read_close_updates_only_working_index_and_survives_reopen() {
         original_index
     );
 }
+
+#[test]
+fn capacity_cleanup_preserves_open_audio_and_reencodes_swapped_slots() {
+    let parent = tempfile::tempdir().unwrap();
+    let (original, copy, mut writer, _) = setup(parent.path());
+    let now = 1800100000_i64;
+    writer
+        .write_audio(
+            [8; 20],
+            19,
+            3,
+            (now - 7200) as u32,
+            &mut [1, 2, 3].as_slice(),
+            &[],
+        )
+        .unwrap();
+    writer
+        .write_audio(
+            [9; 20],
+            20,
+            3,
+            (now - 4000) as u32,
+            &mut [4, 5, 6].as_slice(),
+            &[],
+        )
+        .unwrap();
+    let keep = writer.records[2].stored_size();
+    let configs = crate::policy::REALMS
+        .into_iter()
+        .map(|realm| (realm, crate::policy::default_realm(realm).unwrap()))
+        .collect();
+    let open = HashMap::from([([9; 20], 1)]);
+    let result = writer
+        .cleanup(CleanupContext {
+            configs: &configs,
+            capacity: crate::CapacityValues {
+                first: keep as i64,
+                second: 0,
+                small_disk_bound: 0,
+                large_disk_bound: 0,
+            },
+            now_ticks: now * crate::policy::TICKS_PER_SECOND,
+            local_midnight_ticks: (now / 86400 * 86400) * crate::policy::TICKS_PER_SECOND,
+            free_bytes: 1_000_000_000,
+            open_audio: &open,
+        })
+        .unwrap();
+    assert_eq!(result.selections.len(), 2);
+    assert_eq!(writer.records.len(), 1);
+    assert_eq!(writer.records[0].file_id(), &[9; 20]);
+    assert_eq!(writer.cleanup_orphans().unwrap(), 0);
+    drop(writer);
+    let writer = WorkingStore::open_copy(&copy, &original, &KEY, STATE).unwrap();
+    let mut audio = writer.catalog().open_audio(&[9; 20]).unwrap().unwrap();
+    let mut bytes = Vec::new();
+    audio.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, [4, 5, 6]);
+    assert_eq!(writer.records.len(), 1);
+}
+
+#[test]
+fn expiry_and_orphan_cleanup_preserve_registered_data_and_original_files() {
+    let parent = tempfile::tempdir().unwrap();
+    let (original, copy, mut writer, _) = setup(parent.path());
+    // A source data file with the same native name remains entirely distinct.
+    let record = writer.records[0].clone();
+    let name = cache_file_name(&STATE, record.file_id(), 0, record.version());
+    let relative = PathBuf::from("Data").join(&name[..2]).join(name);
+    fs::create_dir_all(original.join(relative.parent().unwrap())).unwrap();
+    fs::write(original.join(&relative), b"original must remain").unwrap();
+    let now = 1800000000_i64 + 80 * 86400;
+    writer
+        .write_audio([8; 20], 19, 3, now as u32, &mut [1, 2, 3].as_slice(), &[])
+        .unwrap();
+    drop(writer);
+    let mut writer = WorkingStore::open_copy(&copy, &original, &KEY, STATE).unwrap();
+    let configs = crate::policy::REALMS
+        .into_iter()
+        .map(|realm| (realm, crate::policy::default_realm(realm).unwrap()))
+        .collect();
+    let result = writer
+        .cleanup(CleanupContext {
+            configs: &configs,
+            capacity: crate::CapacityValues {
+                first: 1_000_000_000,
+                second: 0,
+                small_disk_bound: 0,
+                large_disk_bound: 0,
+            },
+            now_ticks: now * crate::policy::TICKS_PER_SECOND,
+            local_midnight_ticks: (now / 86400 * 86400) * crate::policy::TICKS_PER_SECOND,
+            free_bytes: 1_000_000_000,
+            open_audio: &HashMap::new(),
+        })
+        .unwrap();
+    assert_eq!(result.selections.len(), 1);
+    assert_eq!(
+        result.selections[0].reason,
+        crate::policy::Reason::ExpiredUsed
+    );
+    assert!(!copy.join(&relative).exists());
+    assert_eq!(
+        fs::read(original.join(&relative)).unwrap(),
+        b"original must remain"
+    );
+    let orphan_name = format!("{}.file", "a".repeat(40));
+    fs::create_dir(copy.join("Data/aa")).unwrap();
+    fs::write(
+        copy.join("Data/aa").join(&orphan_name),
+        b"unregistered native file",
+    )
+    .unwrap();
+    fs::write(copy.join("Data/aa/user-note.txt"), b"retain unrelated file").unwrap();
+    assert_eq!(writer.cleanup_orphans().unwrap(), 1);
+    assert!(copy.join("Data/aa/user-note.txt").exists());
+    assert_eq!(writer.catalog().audio_count(), 1);
+}
+
+#[test]
+fn cleanup_rejects_an_original_alias_before_removing_an_index_entry() {
+    let parent = tempfile::tempdir().unwrap();
+    let (original, copy, writer, _) = setup(parent.path());
+    let record = writer.records[0].clone();
+    let name = cache_file_name(&STATE, record.file_id(), 0, record.version());
+    let relative = PathBuf::from("Data").join(&name[..2]).join(name);
+    fs::create_dir_all(original.join(relative.parent().unwrap())).unwrap();
+    fs::hard_link(copy.join(&relative), original.join(&relative)).unwrap();
+    let bytes = fs::read(original.join(&relative)).unwrap();
+    drop(writer);
+    let index = fs::read(copy.join("Storage/index.dat")).unwrap();
+    let mut writer = WorkingStore::open_copy(&copy, &original, &KEY, STATE).unwrap();
+    let configs = crate::policy::REALMS
+        .into_iter()
+        .map(|realm| (realm, crate::policy::default_realm(realm).unwrap()))
+        .collect();
+    let now = 1800000000_i64 + 80 * 86400;
+    assert!(
+        writer
+            .cleanup(CleanupContext {
+                configs: &configs,
+                capacity: crate::CapacityValues {
+                    first: 1_000_000_000,
+                    second: 0,
+                    small_disk_bound: 0,
+                    large_disk_bound: 0
+                },
+                now_ticks: now * crate::policy::TICKS_PER_SECOND,
+                local_midnight_ticks: (now / 86400 * 86400) * crate::policy::TICKS_PER_SECOND,
+                free_bytes: 1_000_000_000,
+                open_audio: &HashMap::new()
+            })
+            .is_err()
+    );
+    assert_eq!(writer.catalog().partial_audio_count(), 1);
+    drop(writer);
+    assert_eq!(fs::read(copy.join("Storage/index.dat")).unwrap(), index);
+    assert_eq!(fs::read(original.join(&relative)).unwrap(), bytes);
+    assert!(copy.join(relative).exists());
+}

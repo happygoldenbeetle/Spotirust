@@ -136,7 +136,9 @@ impl LocalPlayer {
                 initial_volume: u16::MAX / 2,
                 ..ConnectConfig::default()
             };
+            let policy_session=session.clone();
             let (spirc, task) = Spirc::new(config, session, credentials, player, mixer as Arc<dyn Mixer>).await?;
+            crate::audio_cache::start_policy_worker(policy_session);
             tokio::spawn(task);
             anyhow::Ok((spirc, device_id))
         })?;

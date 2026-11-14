@@ -7,6 +7,41 @@ fn controls() -> Value {
 }
 
 #[test]
+fn capacity_attribute_matches_128_native_property_parses() {
+    let controls: Value =
+        serde_json::from_str(include_str!("fixtures/native_capacity_attribute.json")).unwrap();
+    for control in controls.as_array().unwrap() {
+        let actual = capacity_attribute(control["input"].as_str());
+        let expected = &control["result"];
+        if expected.is_null() {
+            assert!(actual.is_none(), "{control}");
+        } else {
+            let actual = actual.unwrap();
+            assert_eq!(
+                actual.absolute_a,
+                expected["absolute_a"].as_i64().unwrap(),
+                "{control}"
+            );
+            assert_eq!(
+                actual.absolute_b,
+                expected["absolute_b"].as_i64().unwrap(),
+                "{control}"
+            );
+            assert_eq!(
+                actual.fraction_a.to_bits(),
+                (expected["fraction_a"].as_f64().unwrap() as f32).to_bits(),
+                "{control}"
+            );
+            assert_eq!(
+                actual.fraction_b.to_bits(),
+                (expected["fraction_b"].as_f64().unwrap() as f32).to_bits(),
+                "{control}"
+            );
+        }
+    }
+}
+
+#[test]
 fn closed_access_matches_64_native_timestamp_and_counter_updates() {
     use spotify_storage_format::{INDEX_RECORD_SIZE, IndexRecord, adler32};
     let controls: Value =

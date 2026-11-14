@@ -1,0 +1,659 @@
+[
+  {
+    "input": null,
+    "result": null
+  },
+  {
+    "input": "",
+    "result": null
+  },
+  {
+    "input": "10240,90,500,3",
+    "result": {
+      "absolute_a": 10737418240,
+      "fraction_a": 0.8999999761581421,
+      "fraction_b": 0.029999999329447746,
+      "absolute_b": 524288000
+    }
+  },
+  {
+    "input": "1,2,3",
+    "result": null
+  },
+  {
+    "input": "1,2,3,4,5",
+    "result": null
+  },
+  {
+    "input": "0,0,0,0",
+    "result": {
+      "absolute_a": 0,
+      "fraction_a": 0.0,
+      "fraction_b": 0.0,
+      "absolute_b": 0
+    }
+  },
+  {
+    "input": ",,,",
+    "result": {
+      "absolute_a": 0,
+      "fraction_a": 0.0,
+      "fraction_b": 0.0,
+      "absolute_b": 0
+    }
+  },
+  {
+    "input": "1,2,3,",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.0,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "1,,3,4",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 0.0,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": ",2,3,4",
+    "result": {
+      "absolute_a": 0,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": " 1,2,3,4",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "1 ,2,3,4",
+    "result": null
+  },
+  {
+    "input": "+1,+2,+3,+4",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "-1,2,3,4",
+    "result": null
+  },
+  {
+    "input": "1,-2,3,4",
+    "result": null
+  },
+  {
+    "input": "1,2,-3,4",
+    "result": null
+  },
+  {
+    "input": "1,2,3,-4",
+    "result": null
+  },
+  {
+    "input": "1,101,3,4",
+    "result": null
+  },
+  {
+    "input": "1,100,3,100",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 1.0,
+      "fraction_b": 1.0,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "1,2,3,101",
+    "result": null
+  },
+  {
+    "input": "2147483648,2,3,4",
+    "result": {
+      "absolute_a": 2251799812636672,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "999999999999999999999999,2,3,4",
+    "result": {
+      "absolute_a": 2251799812636672,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "1,2,3,4 ",
+    "result": null
+  },
+  {
+    "input": "1,2,3,\t4",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "1,2,3,4\u0000ignored",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 0.019999999552965164,
+      "fraction_b": 0.03999999910593033,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "1,2,3,+",
+    "result": null
+  },
+  {
+    "input": "1,2,3,  ",
+    "result": null
+  },
+  {
+    "input": "1,2,3,0x1",
+    "result": null
+  },
+  {
+    "input": "-1,3,1,100",
+    "result": null
+  },
+  {
+    "input": "90,-1,100,90",
+    "result": null
+  },
+  {
+    "input": "10240,1,3,500",
+    "result": null
+  },
+  {
+    "input": "0,3,500,10240",
+    "result": null
+  },
+  {
+    "input": "90,10240,-1,100",
+    "result": null
+  },
+  {
+    "input": "2147483648,10240,0,1",
+    "result": null
+  },
+  {
+    "input": "3,-1,3,1",
+    "result": null
+  },
+  {
+    "input": "3,1,3,1",
+    "result": {
+      "absolute_a": 3145728,
+      "fraction_a": 0.009999999776482582,
+      "fraction_b": 0.009999999776482582,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "2147483648,101,10240,0",
+    "result": null
+  },
+  {
+    "input": "500,1,1,500",
+    "result": null
+  },
+  {
+    "input": "10240,1,500,101",
+    "result": null
+  },
+  {
+    "input": "100,101,0,-1",
+    "result": null
+  },
+  {
+    "input": "100,-1,2147483648,90",
+    "result": null
+  },
+  {
+    "input": "100,3,500,500",
+    "result": null
+  },
+  {
+    "input": "3,3,100,90",
+    "result": {
+      "absolute_a": 3145728,
+      "fraction_a": 0.029999999329447746,
+      "fraction_b": 0.8999999761581421,
+      "absolute_b": 104857600
+    }
+  },
+  {
+    "input": "90,101,-1,3",
+    "result": null
+  },
+  {
+    "input": "100,-1,90,3",
+    "result": null
+  },
+  {
+    "input": "500,1,3,2147483648",
+    "result": null
+  },
+  {
+    "input": "101,3,10240,10240",
+    "result": null
+  },
+  {
+    "input": "-1,1,90,101",
+    "result": null
+  },
+  {
+    "input": "1,1,2147483648,1",
+    "result": {
+      "absolute_a": 1048576,
+      "fraction_a": 0.009999999776482582,
+      "fraction_b": 0.009999999776482582,
+      "absolute_b": 2251799812636672
+    }
+  },
+  {
+    "input": "0,10240,90,500",
+    "result": null
+  },
+  {
+    "input": "2147483648,3,-1,0",
+    "result": null
+  },
+  {
+    "input": "-1,1,0,1",
+    "result": null
+  },
+  {
+    "input": "1,0,-1,0",
+    "result": null
+  },
+  {
+    "input": "500,100,-1,2147483648",
+    "result": null
+  },
+  {
+    "input": "2147483648,100,1,10240",
+    "result": null
+  },
+  {
+    "input": "100,3,500,500",
+    "result": null
+  },
+  {
+    "input": "1,1,1,2147483648",
+    "result": null
+  },
+  {
+    "input": "1,2147483648,500,10240",
+    "result": null
+  },
+  {
+    "input": "1,10240,100,500",
+    "result": null
+  },
+  {
+    "input": "-1,101,-1,0",
+    "result": null
+  },
+  {
+    "input": "10240,500,1,-1",
+    "result": null
+  },
+  {
+    "input": "10240,3,101,500",
+    "result": null
+  },
+  {
+    "input": "500,0,500,1",
+    "result": {
+      "absolute_a": 524288000,
+      "fraction_a": 0.0,
+      "fraction_b": 0.009999999776482582,
+      "absolute_b": 524288000
+    }
+  },
+  {
+    "input": "10240,500,2147483648,90",
+    "result": null
+  },
+  {
+    "input": "3,0,100,0",
+    "result": {
+      "absolute_a": 3145728,
+      "fraction_a": 0.0,
+      "fraction_b": 0.0,
+      "absolute_b": 104857600
+    }
+  },
+  {
+    "input": "1,500,0,-1",
+    "result": null
+  },
+  {
+    "input": "101,100,1,1",
+    "result": {
+      "absolute_a": 105906176,
+      "fraction_a": 1.0,
+      "fraction_b": 0.009999999776482582,
+      "absolute_b": 1048576
+    }
+  },
+  {
+    "input": "10240,-1,10240,500",
+    "result": null
+  },
+  {
+    "input": "90,0,3,500",
+    "result": null
+  },
+  {
+    "input": "3,1,0,-1",
+    "result": null
+  },
+  {
+    "input": "10240,100,3,0",
+    "result": {
+      "absolute_a": 10737418240,
+      "fraction_a": 1.0,
+      "fraction_b": 0.0,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "500,0,-1,10240",
+    "result": null
+  },
+  {
+    "input": "2147483648,-1,101,10240",
+    "result": null
+  },
+  {
+    "input": "3,0,0,101",
+    "result": null
+  },
+  {
+    "input": "500,-1,101,1",
+    "result": null
+  },
+  {
+    "input": "101,-1,90,500",
+    "result": null
+  },
+  {
+    "input": "1,2147483648,90,0",
+    "result": null
+  },
+  {
+    "input": "1,2147483648,-1,3",
+    "result": null
+  },
+  {
+    "input": "10240,1,3,90",
+    "result": {
+      "absolute_a": 10737418240,
+      "fraction_a": 0.009999999776482582,
+      "fraction_b": 0.8999999761581421,
+      "absolute_b": 3145728
+    }
+  },
+  {
+    "input": "101,90,0,2147483648",
+    "result": null
+  },
+  {
+    "input": "2147483648,0,10240,10240",
+    "result": null
+  },
+  {
+    "input": "100,500,101,101",
+    "result": null
+  },
+  {
+    "input": "100,10240,100,-1",
+    "result": null
+  },
+  {
+    "input": "1,0,500,-1",
+    "result": null
+  },
+  {
+    "input": "0,10240,100,3",
+    "result": null
+  },
+  {
+    "input": "100,10240,100,3",
+    "result": null
+  },
+  {
+    "input": "101,0,3,500",
+    "result": null
+  },
+  {
+    "input": "-1,100,100,90",
+    "result": null
+  },
+  {
+    "input": "500,2147483648,101,3",
+    "result": null
+  },
+  {
+    "input": "-1,101,2147483648,500",
+    "result": null
+  },
+  {
+    "input": "500,2147483648,90,-1",
+    "result": null
+  },
+  {
+    "input": "2147483648,10240,3,2147483648",
+    "result": null
+  },
+  {
+    "input": "3,-1,-1,500",
+    "result": null
+  },
+  {
+    "input": "101,90,2147483648,101",
+    "result": null
+  },
+  {
+    "input": "-1,3,500,500",
+    "result": null
+  },
+  {
+    "input": "101,90,-1,1",
+    "result": null
+  },
+  {
+    "input": "0,2147483648,101,0",
+    "result": null
+  },
+  {
+    "input": "500,10240,1,-1",
+    "result": null
+  },
+  {
+    "input": "2147483648,1,90,0",
+    "result": {
+      "absolute_a": 2251799812636672,
+      "fraction_a": 0.009999999776482582,
+      "fraction_b": 0.0,
+      "absolute_b": 94371840
+    }
+  },
+  {
+    "input": "101,10240,500,90",
+    "result": null
+  },
+  {
+    "input": "2147483648,500,10240,100",
+    "result": null
+  },
+  {
+    "input": "3,90,101,3",
+    "result": {
+      "absolute_a": 3145728,
+      "fraction_a": 0.8999999761581421,
+      "fraction_b": 0.029999999329447746,
+      "absolute_b": 105906176
+    }
+  },
+  {
+    "input": "101,90,10240,1",
+    "result": {
+      "absolute_a": 105906176,
+      "fraction_a": 0.8999999761581421,
+      "fraction_b": 0.009999999776482582,
+      "absolute_b": 10737418240
+    }
+  },
+  {
+    "input": "10240,10240,100,101",
+    "result": null
+  },
+  {
+    "input": "10240,1,-1,2147483648",
+    "result": null
+  },
+  {
+    "input": "-1,101,100,101",
+    "result": null
+  },
+  {
+    "input": "90,1,101,10240",
+    "result": null
+  },
+  {
+    "input": "0,0,90,0",
+    "result": {
+      "absolute_a": 0,
+      "fraction_a": 0.0,
+      "fraction_b": 0.0,
+      "absolute_b": 94371840
+    }
+  },
+  {
+    "input": "0,10240,3,1",
+    "result": null
+  },
+  {
+    "input": "-1,100,0,0",
+    "result": null
+  },
+  {
+    "input": "3,10240,0,2147483648",
+    "result": null
+  },
+  {
+    "input": "101,500,-1,500",
+    "result": null
+  },
+  {
+    "input": "1,2147483648,2147483648,10240",
+    "result": null
+  },
+  {
+    "input": "3,10240,10240,2147483648",
+    "result": null
+  },
+  {
+    "input": "0,0,90,-1",
+    "result": null
+  },
+  {
+    "input": "90,90,0,1",
+    "result": {
+      "absolute_a": 94371840,
+      "fraction_a": 0.8999999761581421,
+      "fraction_b": 0.009999999776482582,
+      "absolute_b": 0
+    }
+  },
+  {
+    "input": "90,500,1,1",
+    "result": null
+  },
+  {
+    "input": "10240,90,10240,3",
+    "result": {
+      "absolute_a": 10737418240,
+      "fraction_a": 0.8999999761581421,
+      "fraction_b": 0.029999999329447746,
+      "absolute_b": 10737418240
+    }
+  },
+  {
+    "input": "500,90,-1,2147483648",
+    "result": null
+  },
+  {
+    "input": "101,500,-1,100",
+    "result": null
+  },
+  {
+    "input": "2147483648,500,500,100",
+    "result": null
+  },
+  {
+    "input": "100,500,0,-1",
+    "result": null
+  },
+  {
+    "input": "101,3,101,0",
+    "result": {
+      "absolute_a": 105906176,
+      "fraction_a": 0.029999999329447746,
+      "fraction_b": 0.0,
+      "absolute_b": 105906176
+    }
+  },
+  {
+    "input": "90,2147483648,3,10240",
+    "result": null
+  },
+  {
+    "input": "500,500,101,10240",
+    "result": null
+  },
+  {
+    "input": "2147483648,90,100,2147483648",
+    "result": null
+  },
+  {
+    "input": "0,100,90,90",
+    "result": {
+      "absolute_a": 0,
+      "fraction_a": 1.0,
+      "fraction_b": 0.8999999761581421,
+      "absolute_b": 94371840
+    }
+  },
+  {
+    "input": "0,10240,100,-1",
+    "result": null
+  }
+]

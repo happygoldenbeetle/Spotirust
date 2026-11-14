@@ -7,11 +7,27 @@ use crate::{
 };
 use sha1::{Digest, Sha1};
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+pub struct CleanupContext<'a> {
+    pub configs: &'a HashMap<u8, crate::policy::RealmConfig>,
+    pub capacity: crate::CapacityValues,
+    pub now_ticks: i64,
+    pub local_midnight_ticks: i64,
+    pub free_bytes: u64,
+    pub open_audio: &'a HashMap<[u8; 20], u64>,
+}
+
+pub struct CleanupResult {
+    pub selections: Vec<crate::policy::Selection>,
+    pub reclaimed_bytes: u64,
+    pub next_delay_ms: u64,
+}
 
 pub struct PartialWrite<'a> {
     pub file_id: [u8; 20],
@@ -34,6 +50,35 @@ pub struct WorkingStore {
 }
 
 impl WorkingStore {
+    pub fn stored_bytes(&self) -> u64 {
+        self.records
+            .iter()
+            .map(|record| u64::from(record.stored_size()))
+            .sum()
+    }
+
+    /// Returns caller-available and total volume bytes for the working cache.
+    #[cfg(windows)]
+    pub fn disk_space(&self) -> io::Result<(u64, u64)> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let path: Vec<_> = self.root.as_os_str().encode_wide().chain(Some(0)).collect();
+        let (mut free, mut total, mut all_free) = (0, 0, 0);
+        if unsafe { GetDiskFreeSpaceExW(path.as_ptr(), &mut free, &mut total, &mut all_free) } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((free, total))
+    }
+
+    #[cfg(not(windows))]
+    pub fn disk_space(&self) -> io::Result<(u64, u64)> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native cache disk query requires Windows",
+        ))
+    }
+
     /// Opens a separate working copy while holding a read-only original handle.
     /// On Windows the exclusive working index open also rejects hard-link aliases
     /// of the original index. No source handle is opened with write access.
@@ -496,6 +541,194 @@ impl WorkingStore {
         }
         self.records[slot] = updated;
         Ok(true)
+    }
+
+    /// Applies the verified selection plan only inside this owned working root.
+    /// Index removal is recoverable before unlinked files become orphans. A crash
+    /// between index publication and unlink is finished by a later orphan sweep.
+    pub fn cleanup(&mut self, context: CleanupContext<'_>) -> io::Result<CleanupResult> {
+        if self.failed {
+            return Err(invalid("storage writer stopped after an I/O failure"));
+        }
+        let entries: Vec<_> = self
+            .records
+            .iter()
+            .map(|record| crate::policy::Entry {
+                realm: record.realm(),
+                created: record.created(),
+                used: record.last_used(),
+                alternate: record.alternate(),
+                stored_size: record.stored_size(),
+                open_handles: if record.realm() == 0 {
+                    context
+                        .open_audio
+                        .get(record.file_id())
+                        .copied()
+                        .unwrap_or_default()
+                } else {
+                    0
+                },
+                protection: record.protection(),
+            })
+            .collect();
+        let selections = crate::policy::plan_eviction(
+            &entries,
+            context.configs,
+            context.capacity,
+            context.now_ticks,
+            context.local_midnight_ticks,
+            context.free_bytes,
+        );
+        let mut next: Vec<_> = self.records.iter().cloned().enumerate().collect();
+        let mut removed = Vec::new();
+        for selection in &selections {
+            let position = next
+                .iter()
+                .position(|(original, _)| *original == selection.entry)
+                .ok_or_else(|| invalid("invalid cleanup selection"))?;
+            let (_, record) = next.swap_remove(position);
+            self.checked_removal(&record)?;
+            removed.push(record);
+        }
+        if !removed.is_empty() {
+            let records: Vec<_> = next.into_iter().map(|(_, record)| record).collect();
+            let changed = records
+                .iter()
+                .enumerate()
+                .filter(|(slot, record)| self.records.get(*slot) != Some(*record))
+                .map(|(slot, record)| (slot as u32, record.clone()))
+                .collect();
+            let result = self.commit(Transaction {
+                header_hash: self.header_hash,
+                index_length: INDEX_HEADER_SIZE as u64
+                    + records.len() as u64 * INDEX_RECORD_SIZE as u64,
+                records: changed,
+                data: None,
+            });
+            if let Err(error) = result {
+                self.failed = true;
+                return Err(error);
+            }
+            self.records = records;
+        }
+        let mut reclaimed_bytes = 0_u64;
+        for record in &removed {
+            if let Some(path) = self.checked_removal(record)? {
+                fs::remove_file(path)?;
+                reclaimed_bytes += u64::from(record.stored_size());
+            }
+        }
+        let next_delay_ms = crate::policy::cleanup_delay_ms(
+            !removed.is_empty(),
+            context.free_bytes.saturating_add(reclaimed_bytes),
+            context.capacity.second.max(0) as u64,
+        );
+        Ok(CleanupResult {
+            selections,
+            reclaimed_bytes,
+            next_delay_ms,
+        })
+    }
+
+    fn checked_removal(&self, record: &IndexRecord) -> io::Result<Option<PathBuf>> {
+        let name = cache_file_name(
+            &self.naming_state,
+            record.file_id(),
+            record.realm(),
+            record.version(),
+        );
+        self.checked_named_removal(&name)
+    }
+
+    fn checked_named_removal(&self, name: &str) -> io::Result<Option<PathBuf>> {
+        if name.len() != 45
+            || !name.ends_with(".file")
+            || !name.as_bytes()[..40].iter().all(u8::is_ascii_hexdigit)
+        {
+            return Err(invalid("invalid native data filename"));
+        }
+        let path = self.root.join("Data").join(&name[..2]).join(name);
+        let canonical = match path.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if !canonical.starts_with(&self.root) {
+            return Err(invalid("cleanup path escapes working root"));
+        }
+        if let Some(original) = &self.original_root {
+            let original_path = original.join("Data").join(&name[..2]).join(name);
+            match original_metadata_handle(&original_path) {
+                Ok(source) => {
+                    let target = original_metadata_handle(&canonical)?;
+                    if same_file(&source, &target)? {
+                        return Err(invalid("cleanup file aliases original"));
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(Some(path))
+    }
+
+    /// Removes only unregistered native data names in the working cache. Caller
+    /// serializes this with writes and runs it after recovery, never on a source.
+    pub fn cleanup_orphans(&mut self) -> io::Result<usize> {
+        if self.failed {
+            return Err(invalid("storage writer stopped after an I/O failure"));
+        }
+        let registered: HashSet<_> = self
+            .records
+            .iter()
+            .map(|record| {
+                cache_file_name(
+                    &self.naming_state,
+                    record.file_id(),
+                    record.realm(),
+                    record.version(),
+                )
+            })
+            .collect();
+        let data = self.root.join("Data").canonicalize()?;
+        if !data.starts_with(&self.root) {
+            return Err(invalid("orphan directory escapes working root"));
+        }
+        let mut removed = 0;
+        for shard in fs::read_dir(data)? {
+            let shard = shard?;
+            let name = shard.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.len() != 2 || !name.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+                continue;
+            }
+            if !shard.file_type()?.is_dir() {
+                continue;
+            }
+            if !shard.path().canonicalize()?.starts_with(&self.root) {
+                return Err(invalid("orphan shard escapes working root"));
+            }
+            for entry in fs::read_dir(shard.path())? {
+                let entry = entry?;
+                let filename = entry.file_name();
+                let Some(filename) = filename.to_str() else {
+                    continue;
+                };
+                if filename.len() != 45
+                    || !filename.ends_with(".file")
+                    || !filename.as_bytes()[..40].iter().all(u8::is_ascii_hexdigit)
+                    || &filename[..2] != name
+                    || registered.contains(filename)
+                {
+                    continue;
+                }
+                if let Some(path) = self.checked_named_removal(filename)? {
+                    fs::remove_file(path)?;
+                    removed += 1;
+                }
+            }
+        }
+        Ok(removed)
     }
 }
 
